@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { format, addDays, addWeeks, addMonths, addYears, parseISO, isAfter, isBefore } from 'date-fns'
+import { format, addDays, addWeeks, addMonths, addYears, parseISO, isAfter } from 'date-fns'
+import { ArrowLeftRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
 import Modal from './Modal'
@@ -36,19 +37,28 @@ function generateOccurrences(rule) {
 }
 
 export default function TransactionFormModal() {
-  const { transactionModal, closeTransactionModal, comptes, categories, tiers, loadComptes, openTransactionModal } = useApp()
+  const { transactionModal, closeTransactionModal, comptes, categories, tiers } = useApp()
   const { open, transaction, defaultCompteId } = transactionModal
 
+  const [mode, setMode] = useState('transaction') // 'transaction' | 'virement'
+
+  // Transaction form
   const [form, setForm] = useState({})
   const [isRecurrent, setIsRecurrent] = useState(false)
   const [recForm, setRecForm] = useState({ frequence: 'mensuel', intervalle_jours: 7, date_fin: '' })
   const [tierSearch, setTierSearch] = useState('')
   const [tierDropdown, setTierDropdown] = useState(false)
+
+  // Transfer form
+  const [transfer, setTransfer] = useState({ from: '', to: '', montant: '', date: today(), notes: '' })
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     if (!open) return
+    setMode('transaction')
+    setError('')
     if (transaction) {
       setForm({
         compte_id: transaction.compte_id,
@@ -72,10 +82,16 @@ export default function TransactionFormModal() {
         notes: '',
         pointee: false,
       })
+      setTransfer({
+        from: defaultCompteId || comptes[0]?.id || '',
+        to: comptes.find(c => c.id !== (defaultCompteId || comptes[0]?.id))?.id || '',
+        montant: '',
+        date: today(),
+        notes: '',
+      })
       setTierSearch('')
     }
     setIsRecurrent(false)
-    setError('')
   }, [open, transaction, defaultCompteId, comptes])
 
   if (!open) return null
@@ -85,36 +101,86 @@ export default function TransactionFormModal() {
   const subCats = categories.filter(c => c.parent === selectedParent)
 
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
+  function setTransferField(k, v) { setTransfer(f => ({ ...f, [k]: v })) }
 
   function selectTiers(t) {
-    setForm(f => ({
-      ...f,
-      tiers_id: t.id,
-      tiers_nom: t.nom,
-      categorie_id: t.categorie_id || f.categorie_id,
-    }))
+    setForm(f => ({ ...f, tiers_id: t.id, tiers_nom: t.nom, categorie_id: t.categorie_id || f.categorie_id }))
     setTierSearch(t.nom)
     setTierDropdown(false)
-  }
-
-  function handleTierInput(val) {
-    setTierSearch(val)
-    setField('tiers_nom', val)
-    setField('tiers_id', '')
-    setTierDropdown(true)
   }
 
   const filteredTiers = tiers.filter(t =>
     t.nom.toLowerCase().includes(tierSearch.toLowerCase())
   ).slice(0, 10)
 
+  // ── Save transfer ──────────────────────────────────────────
+  async function saveTransfer() {
+    if (!transfer.from || !transfer.to || !transfer.montant) {
+      setError('Veuillez remplir tous les champs obligatoires.')
+      return
+    }
+    if (transfer.from === transfer.to) {
+      setError('Le compte source et le compte destination doivent être différents.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const transferId = crypto.randomUUID()
+      const amount = Math.abs(parseFloat(transfer.montant))
+      const fromCompte = comptes.find(c => c.id === transfer.from)
+      const toCompte = comptes.find(c => c.id === transfer.to)
+      const virementCatId = await getOrCreateVirementCategory()
+
+      const { error } = await supabase.from('transactions').insert([
+        {
+          compte_id: transfer.from,
+          date: transfer.date,
+          tiers_nom: toCompte?.nom || 'Virement',
+          categorie_id: virementCatId,
+          montant: -amount,
+          notes: transfer.notes || null,
+          pointee: false,
+          transfer_id: transferId,
+        },
+        {
+          compte_id: transfer.to,
+          date: transfer.date,
+          tiers_nom: fromCompte?.nom || 'Virement',
+          categorie_id: virementCatId,
+          montant: amount,
+          notes: transfer.notes || null,
+          pointee: false,
+          transfer_id: transferId,
+        },
+      ])
+      if (error) throw error
+      closeTransactionModal()
+    } catch (err) {
+      setError(err.message || 'Erreur lors du virement.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function getOrCreateVirementCategory() {
+    const existing = categories.find(c => c.parent === 'Virement Interne' && !c.sous_categorie)
+    if (existing) return existing.id
+    const { data } = await supabase
+      .from('categories')
+      .insert({ parent: 'Virement Interne', sous_categorie: null })
+      .select()
+      .single()
+    return data?.id || null
+  }
+
+  // ── Save transaction ───────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true)
     setError('')
     try {
       if (transaction) {
-        // Edit existing
         const { error } = await supabase.from('transactions').update({
           compte_id: form.compte_id,
           date: form.date,
@@ -127,7 +193,6 @@ export default function TransactionFormModal() {
         }).eq('id', transaction.id)
         if (error) throw error
       } else if (isRecurrent) {
-        // Create recurring rule + generate transactions
         const { data: rule, error: rErr } = await supabase.from('recurrences').insert({
           compte_id: form.compte_id,
           tiers_id: form.tiers_id || null,
@@ -148,7 +213,6 @@ export default function TransactionFormModal() {
           frequence: recForm.frequence,
           intervalle_jours: parseInt(recForm.intervalle_jours),
         })
-
         const txns = dates.map(d => ({
           compte_id: form.compte_id,
           date: d,
@@ -160,11 +224,9 @@ export default function TransactionFormModal() {
           pointee: false,
           recurrence_id: rule.id,
         }))
-
         const { error: tErr } = await supabase.from('transactions').insert(txns)
         if (tErr) throw tErr
       } else {
-        // Single transaction
         const { error } = await supabase.from('transactions').insert({
           compte_id: form.compte_id,
           date: form.date,
@@ -185,210 +247,231 @@ export default function TransactionFormModal() {
     }
   }
 
+  const isEditing = !!transaction
+
   return (
     <Modal
-      title={transaction ? 'Modifier la transaction' : 'Nouvelle transaction'}
+      title={isEditing ? 'Modifier la transaction' : 'Nouvelle opération'}
       onClose={closeTransactionModal}
       size="md"
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Compte */}
-        <div>
-          <label className="label">Compte *</label>
-          <select className="input" value={form.compte_id} onChange={e => setField('compte_id', e.target.value)} required>
-            <option value="">— Choisir un compte —</option>
-            {comptes.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
-          </select>
-        </div>
-
-        {/* Date */}
-        <div>
-          <label className="label">Date *</label>
-          <input type="date" className="input" value={form.date} onChange={e => setField('date', e.target.value)} required />
-        </div>
-
-        {/* Tiers */}
-        <div className="relative">
-          <label className="label">Tiers *</label>
-          <input
-            type="text"
-            className="input"
-            placeholder="Chercher ou saisir un tiers…"
-            value={tierSearch}
-            onChange={e => handleTierInput(e.target.value)}
-            onFocus={() => setTierDropdown(true)}
-            onBlur={() => setTimeout(() => setTierDropdown(false), 150)}
-            required
-          />
-          {tierDropdown && filteredTiers.length > 0 && (
-            <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
-              {filteredTiers.map(t => (
-                <li
-                  key={t.id}
-                  className="px-3 py-2 hover:bg-emerald-50 cursor-pointer text-sm"
-                  onMouseDown={() => selectTiers(t)}
-                >
-                  <span className="font-medium">{t.nom}</span>
-                  {t.categories && (
-                    <span className="text-gray-400 text-xs ml-2">
-                      {t.categories.parent}{t.categories.sous_categorie ? ` — ${t.categories.sous_categorie}` : ''}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Catégorie */}
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="label">Catégorie</label>
-            <select
-              className="input"
-              value={selectedParent}
-              onChange={e => {
-                const cats = categories.filter(c => c.parent === e.target.value)
-                setField('categorie_id', cats[0]?.id || '')
-              }}
-            >
-              <option value="">— Catégorie —</option>
-              {catParents.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Sous-catégorie</label>
-            <select
-              className="input"
-              value={form.categorie_id}
-              onChange={e => setField('categorie_id', e.target.value)}
-              disabled={!selectedParent}
-            >
-              {subCats.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.sous_categorie || '(aucune)'}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Montant */}
-        <div>
-          <label className="label">Montant * <span className="text-gray-400 font-normal">(négatif = dépense, positif = recette)</span></label>
-          <div className="flex gap-2">
-            <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-              <button
-                type="button"
-                onClick={() => setField('montant', form.montant ? -Math.abs(parseFloat(form.montant)) : '')}
-                className={`px-3 py-2 ${parseFloat(form.montant) < 0 ? 'bg-red-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}
-              >
-                − Dépense
-              </button>
-              <button
-                type="button"
-                onClick={() => setField('montant', form.montant ? Math.abs(parseFloat(form.montant)) : '')}
-                className={`px-3 py-2 ${parseFloat(form.montant) > 0 ? 'bg-emerald-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}
-              >
-                + Recette
-              </button>
-            </div>
-            <input
-              type="number"
-              step="0.01"
-              className="input flex-1"
-              placeholder="0.00"
-              value={form.montant === '' ? '' : Math.abs(parseFloat(form.montant) || 0)}
-              onChange={e => {
-                const abs = parseFloat(e.target.value) || 0
-                const signed = parseFloat(form.montant) >= 0 ? abs : -abs
-                setField('montant', signed === 0 ? e.target.value : signed)
-              }}
-              required
-            />
-          </div>
-        </div>
-
-        {/* Notes */}
-        <div>
-          <label className="label">Notes</label>
-          <input type="text" className="input" placeholder="Optionnel…" value={form.notes} onChange={e => setField('notes', e.target.value)} />
-        </div>
-
-        {/* Pointée */}
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="pointee"
-            checked={form.pointee}
-            onChange={e => setField('pointee', e.target.checked)}
-            className="w-4 h-4 text-emerald-600"
-          />
-          <label htmlFor="pointee" className="text-sm text-gray-700">Transaction pointée (confirmée sur le relevé bancaire)</label>
-        </div>
-
-        {/* Récurrence (seulement pour nouvelle transaction) */}
-        {!transaction && (
-          <div className="border-t border-gray-100 pt-3">
-            <div className="flex items-center gap-2 mb-3">
-              <input
-                type="checkbox"
-                id="recurrent"
-                checked={isRecurrent}
-                onChange={e => setIsRecurrent(e.target.checked)}
-                className="w-4 h-4 text-emerald-600"
-              />
-              <label htmlFor="recurrent" className="text-sm font-medium text-gray-700">Transaction récurrente</label>
-            </div>
-            {isRecurrent && (
-              <div className="bg-gray-50 rounded-lg p-3 space-y-3">
-                <div>
-                  <label className="label">Fréquence</label>
-                  <select
-                    className="input"
-                    value={recForm.frequence}
-                    onChange={e => setRecForm(r => ({ ...r, frequence: e.target.value }))}
-                  >
-                    {Object.entries(FREQ_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
-                </div>
-                {recForm.frequence === 'personnalise' && (
-                  <div>
-                    <label className="label">Tous les X jours</label>
-                    <input
-                      type="number"
-                      min="1"
-                      className="input"
-                      value={recForm.intervalle_jours}
-                      onChange={e => setRecForm(r => ({ ...r, intervalle_jours: e.target.value }))}
-                    />
-                  </div>
-                )}
-                <div>
-                  <label className="label">Date de fin <span className="text-gray-400 font-normal">(optionnel — vide = 2 ans)</span></label>
-                  <input
-                    type="date"
-                    className="input"
-                    value={recForm.date_fin}
-                    onChange={e => setRecForm(r => ({ ...r, date_fin: e.target.value }))}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {error && <p className="text-red-500 text-sm">{error}</p>}
-
-        <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-          <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
-          <button type="submit" className="btn-primary" disabled={saving}>
-            {saving ? 'Enregistrement…' : transaction ? 'Mettre à jour' : 'Enregistrer'}
+      {/* Mode tabs */}
+      {!isEditing && (
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden mb-5">
+          <button
+            type="button"
+            onClick={() => setMode('transaction')}
+            className={`flex-1 py-2 text-sm font-medium transition-colors ${
+              mode === 'transaction' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            Transaction
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('virement')}
+            className={`flex-1 py-2 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              mode === 'virement' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <ArrowLeftRight size={15} />
+            Virement interne
           </button>
         </div>
-      </form>
+      )}
+
+      {/* ── TRANSFER FORM ── */}
+      {mode === 'virement' && !isEditing ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Compte source *</label>
+              <select className="input" value={transfer.from} onChange={e => setTransferField('from', e.target.value)}>
+                <option value="">— Choisir —</option>
+                {comptes.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Compte destination *</label>
+              <select className="input" value={transfer.to} onChange={e => setTransferField('to', e.target.value)}>
+                <option value="">— Choisir —</option>
+                {comptes.filter(c => c.id !== transfer.from).map(c => (
+                  <option key={c.id} value={c.id}>{c.nom}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {transfer.from && transfer.to && (
+            <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
+              <span className="font-medium text-red-500 truncate">{comptes.find(c => c.id === transfer.from)?.nom}</span>
+              <ArrowLeftRight size={14} className="shrink-0 text-gray-400" />
+              <span className="font-medium text-emerald-600 truncate">{comptes.find(c => c.id === transfer.to)?.nom}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="label">Montant * (€)</label>
+            <input
+              type="number" step="0.01" min="0" className="input" placeholder="0.00"
+              value={transfer.montant} onChange={e => setTransferField('montant', e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="label">Date *</label>
+            <input type="date" className="input" value={transfer.date} onChange={e => setTransferField('date', e.target.value)} />
+          </div>
+
+          <div>
+            <label className="label">Notes</label>
+            <input type="text" className="input" placeholder="Optionnel…" value={transfer.notes} onChange={e => setTransferField('notes', e.target.value)} />
+          </div>
+
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
+            <button type="button" className="btn-primary" onClick={saveTransfer} disabled={saving}>
+              {saving ? 'Enregistrement…' : 'Effectuer le virement'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* ── TRANSACTION FORM ── */
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Compte *</label>
+            <select className="input" value={form.compte_id} onChange={e => setField('compte_id', e.target.value)} required>
+              <option value="">— Choisir un compte —</option>
+              {comptes.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="label">Date *</label>
+            <input type="date" className="input" value={form.date} onChange={e => setField('date', e.target.value)} required />
+          </div>
+
+          <div className="relative">
+            <label className="label">Tiers *</label>
+            <input
+              type="text" className="input" placeholder="Chercher ou saisir un tiers…"
+              value={tierSearch}
+              onChange={e => { setTierSearch(e.target.value); setField('tiers_nom', e.target.value); setField('tiers_id', ''); setTierDropdown(true) }}
+              onFocus={() => setTierDropdown(true)}
+              onBlur={() => setTimeout(() => setTierDropdown(false), 150)}
+              required
+            />
+            {tierDropdown && filteredTiers.length > 0 && (
+              <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                {filteredTiers.map(t => (
+                  <li key={t.id} className="px-3 py-2 hover:bg-emerald-50 cursor-pointer text-sm" onMouseDown={() => selectTiers(t)}>
+                    <span className="font-medium">{t.nom}</span>
+                    {t.categories && (
+                      <span className="text-gray-400 text-xs ml-2">
+                        {t.categories.parent}{t.categories.sous_categorie ? ` — ${t.categories.sous_categorie}` : ''}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="label">Catégorie</label>
+              <select className="input" value={selectedParent}
+                onChange={e => { const cats = categories.filter(c => c.parent === e.target.value); setField('categorie_id', cats[0]?.id || '') }}>
+                <option value="">— Catégorie —</option>
+                {catParents.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Sous-catégorie</label>
+              <select className="input" value={form.categorie_id} onChange={e => setField('categorie_id', e.target.value)} disabled={!selectedParent}>
+                {subCats.map(c => <option key={c.id} value={c.id}>{c.sous_categorie || '(aucune)'}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Montant * <span className="text-gray-400 font-normal">(négatif = dépense, positif = recette)</span></label>
+            <div className="flex gap-2">
+              <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+                <button type="button"
+                  onClick={() => setField('montant', form.montant ? -Math.abs(parseFloat(form.montant)) : '')}
+                  className={`px-3 py-2 ${parseFloat(form.montant) < 0 ? 'bg-red-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                  − Dépense
+                </button>
+                <button type="button"
+                  onClick={() => setField('montant', form.montant ? Math.abs(parseFloat(form.montant)) : '')}
+                  className={`px-3 py-2 ${parseFloat(form.montant) > 0 ? 'bg-emerald-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                  + Recette
+                </button>
+              </div>
+              <input type="number" step="0.01" className="input flex-1" placeholder="0.00"
+                value={form.montant === '' ? '' : Math.abs(parseFloat(form.montant) || 0)}
+                onChange={e => {
+                  const abs = parseFloat(e.target.value) || 0
+                  const signed = parseFloat(form.montant) >= 0 ? abs : -abs
+                  setField('montant', signed === 0 ? e.target.value : signed)
+                }}
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Notes</label>
+            <input type="text" className="input" placeholder="Optionnel…" value={form.notes} onChange={e => setField('notes', e.target.value)} />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="pointee" checked={form.pointee} onChange={e => setField('pointee', e.target.checked)} className="w-4 h-4 text-emerald-600" />
+            <label htmlFor="pointee" className="text-sm text-gray-700">Transaction pointée (confirmée sur le relevé bancaire)</label>
+          </div>
+
+          {!isEditing && (
+            <div className="border-t border-gray-100 pt-3">
+              <div className="flex items-center gap-2 mb-3">
+                <input type="checkbox" id="recurrent" checked={isRecurrent} onChange={e => setIsRecurrent(e.target.checked)} className="w-4 h-4 text-emerald-600" />
+                <label htmlFor="recurrent" className="text-sm font-medium text-gray-700">Transaction récurrente</label>
+              </div>
+              {isRecurrent && (
+                <div className="bg-gray-50 rounded-lg p-3 space-y-3">
+                  <div>
+                    <label className="label">Fréquence</label>
+                    <select className="input" value={recForm.frequence} onChange={e => setRecForm(r => ({ ...r, frequence: e.target.value }))}>
+                      {Object.entries(FREQ_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  {recForm.frequence === 'personnalise' && (
+                    <div>
+                      <label className="label">Tous les X jours</label>
+                      <input type="number" min="1" className="input" value={recForm.intervalle_jours} onChange={e => setRecForm(r => ({ ...r, intervalle_jours: e.target.value }))} />
+                    </div>
+                  )}
+                  <div>
+                    <label className="label">Date de fin <span className="text-gray-400 font-normal">(optionnel — vide = 2 ans)</span></label>
+                    <input type="date" className="input" value={recForm.date_fin} onChange={e => setRecForm(r => ({ ...r, date_fin: e.target.value }))} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
+            <button type="submit" className="btn-primary" disabled={saving}>
+              {saving ? 'Enregistrement…' : isEditing ? 'Mettre à jour' : 'Enregistrer'}
+            </button>
+          </div>
+        </form>
+      )}
     </Modal>
   )
 }
