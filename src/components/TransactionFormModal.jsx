@@ -51,6 +51,8 @@ export default function TransactionFormModal() {
 
   // Transfer form
   const [transfer, setTransfer] = useState({ from: '', to: '', montant: '', date: today(), notes: '' })
+  const [isTransferRecurrent, setIsTransferRecurrent] = useState(false)
+  const [transferRecForm, setTransferRecForm] = useState({ frequence: 'mensuel', intervalle_jours: 7, date_fin: '' })
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -92,6 +94,8 @@ export default function TransactionFormModal() {
       setTierSearch('')
     }
     setIsRecurrent(false)
+    setIsTransferRecurrent(false)
+    setTransferRecForm({ frequence: 'mensuel', intervalle_jours: 7, date_fin: '' })
   }, [open, transaction, defaultCompteId, comptes])
 
   if (!open) return null
@@ -126,35 +130,57 @@ export default function TransactionFormModal() {
     setSaving(true)
     setError('')
     try {
-      const transferId = crypto.randomUUID()
       const amount = Math.abs(parseFloat(transfer.montant))
       const fromCompte = comptes.find(c => c.id === transfer.from)
       const toCompte = comptes.find(c => c.id === transfer.to)
       const virementCatId = await getOrCreateVirementCategory()
 
-      const { error } = await supabase.from('transactions').insert([
-        {
-          compte_id: transfer.from,
-          date: transfer.date,
-          tiers_nom: toCompte?.nom || 'Virement',
+      if (isTransferRecurrent) {
+        // Create two recurrence rules (one per account) linked by a shared transfer_group_id
+        const transferGroupId = crypto.randomUUID()
+        const recBase = {
+          tiers_nom: null,
           categorie_id: virementCatId,
-          montant: -amount,
-          notes: transfer.notes || null,
-          pointee: false,
-          transfer_id: transferId,
-        },
-        {
-          compte_id: transfer.to,
-          date: transfer.date,
-          tiers_nom: fromCompte?.nom || 'Virement',
-          categorie_id: virementCatId,
-          montant: amount,
-          notes: transfer.notes || null,
-          pointee: false,
-          transfer_id: transferId,
-        },
-      ])
-      if (error) throw error
+          frequence: transferRecForm.frequence,
+          intervalle_jours: transferRecForm.frequence === 'personnalise' ? parseInt(transferRecForm.intervalle_jours) : null,
+          date_debut: transfer.date,
+          date_fin: transferRecForm.date_fin || null,
+          active: true,
+        }
+        const { data: recFrom } = await supabase.from('recurrences').insert({
+          ...recBase, compte_id: transfer.from, tiers_nom: toCompte?.nom || 'Virement', montant: -amount,
+        }).select().single()
+        const { data: recTo } = await supabase.from('recurrences').insert({
+          ...recBase, compte_id: transfer.to, tiers_nom: fromCompte?.nom || 'Virement', montant: amount,
+        }).select().single()
+
+        // Generate all occurrence dates
+        const dates = generateOccurrences({
+          date_debut: transfer.date,
+          date_fin: transferRecForm.date_fin || null,
+          frequence: transferRecForm.frequence,
+          intervalle_jours: parseInt(transferRecForm.intervalle_jours),
+        })
+
+        // Insert paired transactions for each date
+        const txns = dates.flatMap(d => {
+          const transferId = crypto.randomUUID()
+          return [
+            { compte_id: transfer.from, date: d, tiers_nom: toCompte?.nom || 'Virement', categorie_id: virementCatId, montant: -amount, notes: transfer.notes || null, pointee: false, transfer_id: transferId, recurrence_id: recFrom?.id },
+            { compte_id: transfer.to, date: d, tiers_nom: fromCompte?.nom || 'Virement', categorie_id: virementCatId, montant: amount, notes: transfer.notes || null, pointee: false, transfer_id: transferId, recurrence_id: recTo?.id },
+          ]
+        })
+        const { error } = await supabase.from('transactions').insert(txns)
+        if (error) throw error
+      } else {
+        // Single transfer
+        const transferId = crypto.randomUUID()
+        const { error } = await supabase.from('transactions').insert([
+          { compte_id: transfer.from, date: transfer.date, tiers_nom: toCompte?.nom || 'Virement', categorie_id: virementCatId, montant: -amount, notes: transfer.notes || null, pointee: false, transfer_id: transferId },
+          { compte_id: transfer.to, date: transfer.date, tiers_nom: fromCompte?.nom || 'Virement', categorie_id: virementCatId, montant: amount, notes: transfer.notes || null, pointee: false, transfer_id: transferId },
+        ])
+        if (error) throw error
+      }
       closeTransactionModal()
     } catch (err) {
       setError(err.message || 'Erreur lors du virement.')
@@ -328,12 +354,44 @@ export default function TransactionFormModal() {
             <input type="text" className="input" placeholder="Optionnel…" value={transfer.notes} onChange={e => setTransferField('notes', e.target.value)} />
           </div>
 
+          {/* Recurring transfer option */}
+          <div className="border-t border-gray-100 pt-3">
+            <div className="flex items-center gap-2 mb-3">
+              <input type="checkbox" id="transferRecurrent" checked={isTransferRecurrent}
+                onChange={e => setIsTransferRecurrent(e.target.checked)} className="w-4 h-4 text-emerald-600" />
+              <label htmlFor="transferRecurrent" className="text-sm font-medium text-gray-700">Virement récurrent</label>
+            </div>
+            {isTransferRecurrent && (
+              <div className="bg-gray-50 rounded-lg p-3 space-y-3">
+                <div>
+                  <label className="label">Fréquence</label>
+                  <select className="input" value={transferRecForm.frequence}
+                    onChange={e => setTransferRecForm(r => ({ ...r, frequence: e.target.value }))}>
+                    {Object.entries(FREQ_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+                {transferRecForm.frequence === 'personnalise' && (
+                  <div>
+                    <label className="label">Tous les X jours</label>
+                    <input type="number" min="1" className="input" value={transferRecForm.intervalle_jours}
+                      onChange={e => setTransferRecForm(r => ({ ...r, intervalle_jours: e.target.value }))} />
+                  </div>
+                )}
+                <div>
+                  <label className="label">Date de fin <span className="text-gray-400 font-normal">(optionnel — vide = 2 ans)</span></label>
+                  <input type="date" className="input" value={transferRecForm.date_fin}
+                    onChange={e => setTransferRecForm(r => ({ ...r, date_fin: e.target.value }))} />
+                </div>
+              </div>
+            )}
+          </div>
+
           {error && <p className="text-red-500 text-sm">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
             <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
             <button type="button" className="btn-primary" onClick={saveTransfer} disabled={saving}>
-              {saving ? 'Enregistrement…' : 'Effectuer le virement'}
+              {saving ? 'Enregistrement…' : isTransferRecurrent ? 'Créer les virements récurrents' : 'Effectuer le virement'}
             </button>
           </div>
         </div>
