@@ -145,6 +145,8 @@ export default function Dashboard() {
             const solde = balances[c.id]?.solde ?? 0
             const pointe = balances[c.id]?.pointe ?? 0
             const diff = solde - pointe
+            const proj3m = projection3m?.[c.id] ?? null
+            const projDiff = proj3m !== null ? proj3m - pointe : null
             return (
               <button
                 key={c.id}
@@ -158,14 +160,34 @@ export default function Dashboard() {
                   </div>
                   <ArrowRight size={16} className="text-gray-300 group-hover:text-emerald-500 transition-colors mt-1 shrink-0" />
                 </div>
-                <p className={`text-2xl font-bold mt-2 ${solde >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-                  {fmt(solde)}
+
+                {/* Total pointé — main figure */}
+                <p className={`text-2xl font-bold mt-2 ${pointe >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+                  {fmt(pointe)}
                 </p>
+                <p className="text-xs text-gray-400 mt-0.5">Pointé ✓</p>
+
+                {/* Théorique if different */}
                 {Math.abs(diff) > 0.01 && (
                   <p className="text-xs text-gray-400 mt-1">
-                    Pointé : <span className="font-medium">{fmt(pointe)}</span>
+                    Théorique : <span className="font-medium text-gray-600">{fmt(solde)}</span>
                     <span className="ml-1 text-amber-500">({diff > 0 ? '+' : ''}{fmt(diff)} non pointé)</span>
                   </p>
+                )}
+
+                {/* 3-month projection */}
+                {proj3m !== null && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
+                    <span className="text-xs text-gray-400">Dans 3 mois</span>
+                    <div className="text-right">
+                      <span className="text-sm font-semibold text-gray-700">{fmt(proj3m)}</span>
+                      {projDiff !== null && Math.abs(projDiff) > 0.01 && (
+                        <span className={`ml-1 text-xs font-medium ${projDiff >= 0 ? 'text-emerald-500' : 'text-red-400'}`}>
+                          {projDiff >= 0 ? '+' : ''}{fmt(projDiff)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 )}
               </button>
             )
