@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { CheckCircle2, Circle, Pencil, Trash2, Plus, Filter, Check } from 'lucide-react'
+import { CheckCircle2, Circle, Pencil, Trash2, Plus, Filter, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
 import Modal from '../components/Modal'
@@ -19,6 +19,7 @@ export default function AccountPage() {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [expandedMonths, setExpandedMonths] = useState({})
 
   // Filters
   const [filterMonth, setFilterMonth] = useState('')
@@ -147,40 +148,75 @@ export default function AccountPage() {
             Ajouter la première transaction
           </button>
         </div>
-      ) : (
-        Object.entries(grouped)
-          .sort((a, b) => b[0].localeCompare(a[0]))
-          .map(([month, txns]) => {
-            const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
-            return (
-              <div key={month}>
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-gray-600 capitalize">
-                    {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
-                  </h3>
-                  <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
-                  </span>
+      ) : (() => {
+        const sortedMonths = Object.entries(grouped).sort((a, b) => b[0].localeCompare(a[0]))
+        const allExpanded = sortedMonths.every(([m]) => expandedMonths[m])
+        return (
+          <>
+            {/* Collapse / expand all */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => {
+                  const next = {}
+                  sortedMonths.forEach(([m]) => { next[m] = !allExpanded })
+                  setExpandedMonths(next)
+                }}
+                className="flex items-center gap-1 text-xs text-emerald-600 hover:underline"
+              >
+                {allExpanded ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+                {allExpanded ? 'Tout replier' : 'Tout déplier'}
+              </button>
+            </div>
+
+            {sortedMonths.map(([month, txns]) => {
+              const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
+              const isOpen = !!expandedMonths[month]
+              return (
+                <div key={month}>
+                  {/* Month header — clickable */}
+                  <button
+                    className="w-full flex items-center justify-between py-2 px-1 hover:bg-gray-50 rounded-lg transition-colors group"
+                    onClick={() => setExpandedMonths(e => ({ ...e, [month]: !e[month] }))}
+                  >
+                    <div className="flex items-center gap-2">
+                      {isOpen
+                        ? <ChevronDown size={16} className="text-gray-400" />
+                        : <ChevronRight size={16} className="text-gray-400" />
+                      }
+                      <span className="text-sm font-semibold text-gray-600 capitalize">
+                        {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                      </span>
+                      <span className="text-xs text-gray-400">({txns.length})</span>
+                    </div>
+                    <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
+                    </span>
+                  </button>
+
+                  {/* Transactions — only shown when expanded */}
+                  {isOpen && (
+                    <div className="card p-0 overflow-hidden mt-1 mb-3">
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-gray-50">
+                          {txns.map(t => (
+                            <TransactionRow
+                              key={t.id}
+                              t={t}
+                              onToggle={() => togglePointee(t)}
+                              onEdit={() => openTransactionModal(id, t)}
+                              onDelete={() => setDeleteConfirm(t)}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-                <div className="card p-0 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <tbody className="divide-y divide-gray-50">
-                      {txns.map(t => (
-                        <TransactionRow
-                          key={t.id}
-                          t={t}
-                          onToggle={() => togglePointee(t)}
-                          onEdit={() => openTransactionModal(id, t)}
-                          onDelete={() => setDeleteConfirm(t)}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )
-          })
-      )}
+              )
+            })}
+          </>
+        )
+      })()}
 
       {/* Delete confirmation modal */}
       {deleteConfirm && (
