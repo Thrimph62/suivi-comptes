@@ -254,7 +254,7 @@ export default function AccountPage() {
                                 : <ChevronRight size={15} className="text-gray-400" />
                               }
                               <span className="text-sm font-semibold text-gray-600 capitalize">
-                                {format(new Date(month + '-01'), 'MMMM', { locale: fr })}
+                                {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
                               </span>
                               <span className="text-xs text-gray-400">({txns.length})</span>
                             </div>
