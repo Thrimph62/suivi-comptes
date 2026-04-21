@@ -19,6 +19,9 @@ export default function AccountPage() {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+
+  // Two-level expand state: years and months both collapsed by default
+  const [expandedYears, setExpandedYears] = useState({})
   const [expandedMonths, setExpandedMonths] = useState({})
 
   // Filters
@@ -70,13 +73,54 @@ export default function AccountPage() {
     return monthMatch && catMatch
   })
 
-  // Group by month for display
-  const grouped = filtered.reduce((acc, t) => {
-    const key = t.date.slice(0, 7)
-    if (!acc[key]) acc[key] = []
-    acc[key].push(t)
+  // Group by year → month
+  const groupedByYear = filtered.reduce((acc, t) => {
+    const year = t.date.slice(0, 4)
+    const month = t.date.slice(0, 7)
+    if (!acc[year]) acc[year] = {}
+    if (!acc[year][month]) acc[year][month] = []
+    acc[year][month].push(t)
     return acc
   }, {})
+
+  const sortedYears = Object.keys(groupedByYear).sort((a, b) => b.localeCompare(a))
+
+  // Collect all month keys for expand-all logic
+  const allMonthKeys = sortedYears.flatMap(y => Object.keys(groupedByYear[y]))
+  const allYearsExpanded = sortedYears.every(y => expandedYears[y])
+  const allMonthsExpanded = allMonthKeys.every(m => expandedMonths[m])
+  const everythingExpanded = allYearsExpanded && allMonthsExpanded
+
+  function expandAll() {
+    const years = {}
+    const months = {}
+    sortedYears.forEach(y => {
+      years[y] = true
+      Object.keys(groupedByYear[y]).forEach(m => { months[m] = true })
+    })
+    setExpandedYears(years)
+    setExpandedMonths(months)
+  }
+
+  function collapseAll() {
+    setExpandedYears({})
+    setExpandedMonths({})
+  }
+
+  function toggleYear(year) {
+    const isOpen = !!expandedYears[year]
+    setExpandedYears(e => ({ ...e, [year]: !isOpen }))
+    // When collapsing a year, also collapse its months
+    if (isOpen) {
+      const months = {}
+      Object.keys(groupedByYear[year]).forEach(m => { months[m] = false })
+      setExpandedMonths(e => ({ ...e, ...months }))
+    }
+  }
+
+  function toggleMonth(month) {
+    setExpandedMonths(e => ({ ...e, [month]: !e[month] }))
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -138,7 +182,7 @@ export default function AccountPage() {
         <span className="text-xs text-gray-400 ml-auto">{filtered.length} transaction(s)</span>
       </div>
 
-      {/* Transactions by month */}
+      {/* Transactions: Year → Month → Rows */}
       {loading ? (
         <p className="text-gray-400">Chargement…</p>
       ) : filtered.length === 0 ? (
@@ -148,75 +192,105 @@ export default function AccountPage() {
             Ajouter la première transaction
           </button>
         </div>
-      ) : (() => {
-        const sortedMonths = Object.entries(grouped).sort((a, b) => b[0].localeCompare(a[0]))
-        const allExpanded = sortedMonths.every(([m]) => expandedMonths[m])
-        return (
-          <>
-            {/* Collapse / expand all */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  const next = {}
-                  sortedMonths.forEach(([m]) => { next[m] = !allExpanded })
-                  setExpandedMonths(next)
-                }}
-                className="flex items-center gap-1 text-xs text-emerald-600 hover:underline"
-              >
-                {allExpanded ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
-                {allExpanded ? 'Tout replier' : 'Tout déplier'}
-              </button>
-            </div>
+      ) : (
+        <>
+          {/* Tout déplier / replier */}
+          <div className="flex justify-end">
+            <button
+              onClick={everythingExpanded ? collapseAll : expandAll}
+              className="flex items-center gap-1 text-xs text-emerald-600 hover:underline"
+            >
+              {everythingExpanded ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+              {everythingExpanded ? 'Tout replier' : 'Tout déplier'}
+            </button>
+          </div>
 
-            {sortedMonths.map(([month, txns]) => {
-              const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
-              const isOpen = !!expandedMonths[month]
-              return (
-                <div key={month}>
-                  {/* Month header — clickable */}
-                  <button
-                    className="w-full flex items-center justify-between py-2 px-1 hover:bg-gray-50 rounded-lg transition-colors group"
-                    onClick={() => setExpandedMonths(e => ({ ...e, [month]: !e[month] }))}
-                  >
-                    <div className="flex items-center gap-2">
-                      {isOpen
-                        ? <ChevronDown size={16} className="text-gray-400" />
-                        : <ChevronRight size={16} className="text-gray-400" />
-                      }
-                      <span className="text-sm font-semibold text-gray-600 capitalize">
-                        {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
-                      </span>
-                      <span className="text-xs text-gray-400">({txns.length})</span>
-                    </div>
-                    <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                      {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
-                    </span>
-                  </button>
+          {sortedYears.map(year => {
+            const yearMonths = groupedByYear[year]
+            const sortedMonths = Object.keys(yearMonths).sort((a, b) => b.localeCompare(a))
+            const yearTotal = sortedMonths.reduce((s, m) =>
+              s + yearMonths[m].reduce((ms, t) => ms + parseFloat(t.montant), 0), 0)
+            const yearCount = sortedMonths.reduce((s, m) => s + yearMonths[m].length, 0)
+            const isYearOpen = !!expandedYears[year]
 
-                  {/* Transactions — only shown when expanded */}
-                  {isOpen && (
-                    <div className="card p-0 overflow-hidden mt-1 mb-3">
-                      <table className="w-full text-sm">
-                        <tbody className="divide-y divide-gray-50">
-                          {txns.map(t => (
-                            <TransactionRow
-                              key={t.id}
-                              t={t}
-                              onToggle={() => togglePointee(t)}
-                              onEdit={() => openTransactionModal(id, t)}
-                              onDelete={() => setDeleteConfirm(t)}
-                            />
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </>
-        )
-      })()}
+            return (
+              <div key={year} className="space-y-1">
+                {/* ── Year header ── */}
+                <button
+                  className="w-full flex items-center justify-between py-2.5 px-3 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+                  onClick={() => toggleYear(year)}
+                >
+                  <div className="flex items-center gap-2">
+                    {isYearOpen
+                      ? <ChevronDown size={17} className="text-gray-500" />
+                      : <ChevronRight size={17} className="text-gray-500" />
+                    }
+                    <span className="font-bold text-gray-800 text-base">{year}</span>
+                    <span className="text-xs text-gray-500">({yearCount} transaction{yearCount > 1 ? 's' : ''})</span>
+                  </div>
+                  <span className={`font-bold text-sm ${yearTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {yearTotal >= 0 ? '+' : ''}{fmt(yearTotal)}
+                  </span>
+                </button>
+
+                {/* ── Months inside year ── */}
+                {isYearOpen && (
+                  <div className="ml-4 space-y-1">
+                    {sortedMonths.map(month => {
+                      const txns = yearMonths[month]
+                      const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
+                      const isMonthOpen = !!expandedMonths[month]
+
+                      return (
+                        <div key={month}>
+                          {/* Month header */}
+                          <button
+                            className="w-full flex items-center justify-between py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                            onClick={() => toggleMonth(month)}
+                          >
+                            <div className="flex items-center gap-2">
+                              {isMonthOpen
+                                ? <ChevronDown size={15} className="text-gray-400" />
+                                : <ChevronRight size={15} className="text-gray-400" />
+                              }
+                              <span className="text-sm font-semibold text-gray-600 capitalize">
+                                {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                              </span>
+                              <span className="text-xs text-gray-400">({txns.length})</span>
+                            </div>
+                            <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                              {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
+                            </span>
+                          </button>
+
+                          {/* Transactions */}
+                          {isMonthOpen && (
+                            <div className="card p-0 overflow-hidden mt-1 mb-2">
+                              <table className="w-full text-sm">
+                                <tbody className="divide-y divide-gray-50">
+                                  {txns.map(t => (
+                                    <TransactionRow
+                                      key={t.id}
+                                      t={t}
+                                      onToggle={() => togglePointee(t)}
+                                      onEdit={() => openTransactionModal(id, t)}
+                                      onDelete={() => setDeleteConfirm(t)}
+                                    />
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </>
+      )}
 
       {/* Delete confirmation modal */}
       {deleteConfirm && (
@@ -258,6 +332,7 @@ function TransactionRow({ t, onToggle, onEdit, onDelete }) {
         )}
         {t.notes && <p className="text-xs text-gray-400 italic">{t.notes}</p>}
         {t.recurrence_id && <span className="text-xs bg-blue-50 text-blue-600 px-1 rounded">↻ récurrent</span>}
+        {t.transfer_id && <span className="text-xs bg-purple-50 text-purple-600 px-1 rounded ml-1">↔ virement</span>}
       </td>
       <td className={`py-3 pr-2 text-right font-semibold text-sm ${montant >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
         {montant >= 0 ? '+' : ''}{new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(montant)}
