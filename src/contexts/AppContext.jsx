@@ -9,25 +9,25 @@ export function AppProvider({ children }) {
   const [tiers, setTiers] = useState([])
   const [loading, setLoading] = useState(true)
 
-  // Modal transaction
   const [transactionModal, setTransactionModal] = useState({
-    open: false,
-    transaction: null,     // null = création, objet = édition
-    defaultCompteId: null,
+    open: false, transaction: null, defaultCompteId: null,
   })
 
   const loadComptes = useCallback(async () => {
-    const { data } = await supabase.from('comptes').select('*').order('ordre')
+    const { data } = await supabase.from('suivi_comptes_comptes').select('*').order('ordre')
     if (data) setComptes(data)
   }, [])
 
   const loadCategories = useCallback(async () => {
-    const { data } = await supabase.from('categories').select('*').order('parent').order('sous_categorie')
+    const { data } = await supabase.from('suivi_comptes_categories').select('*').order('parent').order('sous_categorie')
     if (data) setCategories(data)
   }, [])
 
   const loadTiers = useCallback(async () => {
-    const { data } = await supabase.from('tiers').select('*, categories(parent, sous_categorie)').order('nom')
+    const { data } = await supabase
+      .from('suivi_comptes_tiers')
+      .select('*, suivi_comptes_categories(parent, sous_categorie)')
+      .order('nom')
     if (data) setTiers(data)
   }, [])
 
@@ -47,15 +47,6 @@ export function AppProvider({ children }) {
     setTransactionModal({ open: false, transaction: null, defaultCompteId: null })
   }
 
-  // Calcul du solde d'un compte
-  function getSoldeCompte(compteId, transactions, pointeeOnly = false) {
-    const compte = comptes.find(c => c.id === compteId)
-    if (!compte) return 0
-    const filtered = pointeeOnly ? transactions.filter(t => t.pointee) : transactions
-    const sum = filtered.reduce((acc, t) => acc + parseFloat(t.montant || 0), 0)
-    return parseFloat(compte.solde_initial || 0) + sum
-  }
-
   return (
     <AppContext.Provider value={{
       comptes, loadComptes,
@@ -63,7 +54,6 @@ export function AppProvider({ children }) {
       tiers, loadTiers,
       loading,
       transactionModal, openTransactionModal, closeTransactionModal,
-      getSoldeCompte,
     }}>
       {children}
     </AppContext.Provider>

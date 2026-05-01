@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { format, startOfMonth, endOfMonth, addDays } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { TrendingUp, TrendingDown, ArrowRight } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
 
@@ -16,91 +16,65 @@ export default function Dashboard() {
   const [balances, setBalances] = useState({})
   const [recentTxns, setRecentTxns] = useState([])
   const [chartData, setChartData] = useState([])
-  const [loading, setLoading] = useState(true)
   const [projection3m, setProjection3m] = useState(null)
+  const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
-  useEffect(() => {
-    if (!comptes.length) return
-    loadData()
-  }, [comptes])
+  useEffect(() => { if (comptes.length) loadData() }, [comptes])
 
   async function loadData() {
     setLoading(true)
     const ids = comptes.map(c => c.id)
 
-    // All transactions for balance
     const { data: allTxns } = await supabase
-      .from('transactions')
+      .from('suivi_comptes_transactions')
       .select('compte_id, montant, pointee')
       .in('compte_id', ids)
 
-    // Compute balances
     const bal = {}
     for (const c of comptes) {
       const txns = (allTxns || []).filter(t => t.compte_id === c.id)
       const total = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
       const pointed = txns.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
-      bal[c.id] = {
-        solde: parseFloat(c.solde_initial) + total,
-        pointe: parseFloat(c.solde_initial) + pointed,
-      }
+      bal[c.id] = { solde: parseFloat(c.solde_initial) + total, pointe: parseFloat(c.solde_initial) + pointed }
     }
     setBalances(bal)
 
-    // Recent transactions (last 10)
     const { data: recent } = await supabase
-      .from('transactions')
-      .select('*, comptes(nom), categories(parent, sous_categorie)')
+      .from('suivi_comptes_transactions')
+      .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
       .in('compte_id', ids)
-      .order('date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(10)
+      .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(10)
     setRecentTxns(recent || [])
 
-    // Spending by category this month
     const mStart = format(startOfMonth(new Date()), 'yyyy-MM-dd')
     const mEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd')
     const { data: monthTxns } = await supabase
-      .from('transactions')
-      .select('montant, categories(parent)')
-      .in('compte_id', ids)
-      .gte('date', mStart)
-      .lte('date', mEnd)
-      .lt('montant', 0)
-
+      .from('suivi_comptes_transactions')
+      .select('montant, suivi_comptes_categories(parent)')
+      .in('compte_id', ids).gte('date', mStart).lte('date', mEnd).lt('montant', 0)
     const byCategory = {}
     for (const t of (monthTxns || [])) {
-      const cat = t.categories?.parent || 'Non catégorisé'
+      const cat = t.suivi_comptes_categories?.parent || 'Non catégorisé'
       byCategory[cat] = (byCategory[cat] || 0) + Math.abs(parseFloat(t.montant))
     }
-    const chart = Object.entries(byCategory)
-      .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8)
-    setChartData(chart)
+    setChartData(Object.entries(byCategory).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 })).sort((a, b) => b.value - a.value).slice(0, 8))
 
-    // 3-month projection: sum all transactions up to 90 days from now
     const in90days = format(addDays(new Date(), 90), 'yyyy-MM-dd')
     const { data: futureTxns } = await supabase
-      .from('transactions')
-      .select('compte_id, montant')
-      .in('compte_id', ids)
-      .lte('date', in90days)
+      .from('suivi_comptes_transactions').select('compte_id, montant').in('compte_id', ids).lte('date', in90days)
     const proj = {}
     for (const c of comptes) {
       const txns = (futureTxns || []).filter(t => t.compte_id === c.id)
       proj[c.id] = parseFloat(c.solde_initial) + txns.reduce((s, t) => s + parseFloat(t.montant), 0)
     }
     setProjection3m(proj)
-
     setLoading(false)
   }
 
   const totalGlobal = comptes.reduce((s, c) => s + (balances[c.id]?.solde || 0), 0)
   const totalPointe = comptes.reduce((s, c) => s + (balances[c.id]?.pointe || 0), 0)
   const totalProjection3m = projection3m ? comptes.reduce((s, c) => s + (projection3m[c.id] || 0), 0) : null
-
   const COLORS = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316']
 
   return (
@@ -110,7 +84,6 @@ export default function Dashboard() {
         <span className="text-sm text-gray-500">{format(new Date(), 'EEEE d MMMM yyyy', { locale: fr })}</span>
       </div>
 
-      {/* Hero card */}
       <div className="card bg-gradient-to-r from-emerald-600 to-emerald-700 text-white border-0">
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
           <div>
@@ -119,9 +92,7 @@ export default function Dashboard() {
             <p className="text-emerald-200 text-sm mt-2">
               Théorique : <span className="font-semibold text-white">{fmt(totalGlobal)}</span>
               {Math.abs(totalGlobal - totalPointe) > 0.01 && (
-                <span className="ml-2 text-emerald-300">
-                  ({totalGlobal - totalPointe > 0 ? '+' : ''}{fmt(totalGlobal - totalPointe)} non pointé)
-                </span>
+                <span className="ml-2 text-emerald-300">({totalGlobal - totalPointe > 0 ? '+' : ''}{fmt(totalGlobal - totalPointe)} non pointé)</span>
               )}
             </p>
           </div>
@@ -137,7 +108,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Account cards */}
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-3">Soldes des comptes</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -148,11 +118,7 @@ export default function Dashboard() {
             const proj3m = projection3m?.[c.id] ?? null
             const projDiff = proj3m !== null ? proj3m - pointe : null
             return (
-              <button
-                key={c.id}
-                onClick={() => navigate(`/compte/${c.id}`)}
-                className="card text-left hover:shadow-md transition-shadow group"
-              >
+              <button key={c.id} onClick={() => navigate(`/compte/${c.id}`)} className="card text-left hover:shadow-md transition-shadow group">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 text-sm truncate">{c.nom}</p>
@@ -160,22 +126,14 @@ export default function Dashboard() {
                   </div>
                   <ArrowRight size={16} className="text-gray-300 group-hover:text-emerald-500 transition-colors mt-1 shrink-0" />
                 </div>
-
-                {/* Total pointé — main figure */}
-                <p className={`text-2xl font-bold mt-2 ${pointe >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-                  {fmt(pointe)}
-                </p>
+                <p className={`text-2xl font-bold mt-2 ${pointe >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{fmt(pointe)}</p>
                 <p className="text-xs text-gray-400 mt-0.5">Pointé ✓</p>
-
-                {/* Théorique if different */}
                 {Math.abs(diff) > 0.01 && (
                   <p className="text-xs text-gray-400 mt-1">
                     Théorique : <span className="font-medium text-gray-600">{fmt(solde)}</span>
                     <span className="ml-1 text-amber-500">({diff > 0 ? '+' : ''}{fmt(diff)} non pointé)</span>
                   </p>
                 )}
-
-                {/* 3-month projection */}
                 {proj3m !== null && (
                   <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
                     <span className="text-xs text-gray-400">Dans 3 mois</span>
@@ -196,12 +154,9 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent transactions */}
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">Dernières transactions</h2>
-          {loading ? (
-            <p className="text-gray-400 text-sm">Chargement…</p>
-          ) : recentTxns.length === 0 ? (
+          {loading ? <p className="text-gray-400 text-sm">Chargement…</p> : recentTxns.length === 0 ? (
             <p className="text-gray-400 text-sm">Aucune transaction.</p>
           ) : (
             <ul className="divide-y divide-gray-50">
@@ -209,27 +164,17 @@ export default function Dashboard() {
                 <li key={t.id} className="py-2 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">{t.tiers_nom || '—'}</p>
-                    <p className="text-xs text-gray-400">
-                      {t.comptes?.nom} · {format(new Date(t.date), 'd MMM', { locale: fr })}
-                    </p>
+                    <p className="text-xs text-gray-400">{t.suivi_comptes_comptes?.nom} · {format(new Date(t.date), 'd MMM', { locale: fr })}</p>
                   </div>
-                  <span className={parseFloat(t.montant) >= 0 ? 'montant-positif text-sm' : 'montant-negatif text-sm'}>
-                    {fmt(t.montant)}
-                  </span>
+                  <span className={parseFloat(t.montant) >= 0 ? 'montant-positif text-sm' : 'montant-negatif text-sm'}>{fmt(t.montant)}</span>
                 </li>
               ))}
             </ul>
           )}
         </div>
-
-        {/* Spending by category */}
         <div className="card">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">
-            Dépenses du mois — {format(new Date(), 'MMMM yyyy', { locale: fr })}
-          </h2>
-          {chartData.length === 0 ? (
-            <p className="text-gray-400 text-sm">Aucune dépense ce mois.</p>
-          ) : (
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">Dépenses du mois — {format(new Date(), 'MMMM yyyy', { locale: fr })}</h2>
+          {chartData.length === 0 ? <p className="text-gray-400 text-sm">Aucune dépense ce mois.</p> : (
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20 }}>
                 <XAxis type="number" tickFormatter={v => `${v}€`} tick={{ fontSize: 11 }} />

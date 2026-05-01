@@ -4,14 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { useApp } from '../../contexts/AppContext'
 import Modal from '../../components/Modal'
 
-const TYPES = {
-  courant: 'Compte courant',
-  epargne: 'Épargne',
-  cheques_repas: 'Chèques repas',
-  titres_services: 'Titres services',
-  autre: 'Autre',
-}
-
+const TYPES = { courant: 'Compte courant', epargne: 'Épargne', cheques_repas: 'Chèques repas', titres_services: 'Titres services', autre: 'Autre' }
 const PAYS = ['BE', 'FR', 'Autre']
 
 export default function AccountsSettings() {
@@ -32,32 +25,18 @@ export default function AccountsSettings() {
 
   function openEdit(c) {
     setEditing(c)
-    setForm({
-      nom: c.nom,
-      type: c.type,
-      banque: c.banque || '',
-      pays: c.pays || 'BE',
-      solde_initial: String(c.solde_initial ?? 0),
-      ordre: String(c.ordre ?? 99),
-    })
+    setForm({ nom: c.nom, type: c.type, banque: c.banque || '', pays: c.pays || 'BE', solde_initial: String(c.solde_initial ?? 0), ordre: String(c.ordre ?? 99) })
     setShowModal(true)
   }
 
   async function save() {
     if (!form.nom.trim()) return
     setSaving(true)
-    const payload = {
-      nom: form.nom.trim(),
-      type: form.type,
-      banque: form.banque.trim() || null,
-      pays: form.pays,
-      solde_initial: parseFloat(form.solde_initial) || 0,
-      ordre: parseInt(form.ordre) || 99,
-    }
+    const payload = { nom: form.nom.trim(), type: form.type, banque: form.banque.trim() || null, pays: form.pays, solde_initial: parseFloat(form.solde_initial) || 0, ordre: parseInt(form.ordre) || 99 }
     if (editing) {
-      await supabase.from('comptes').update(payload).eq('id', editing.id)
+      await supabase.from('suivi_comptes_comptes').update(payload).eq('id', editing.id)
     } else {
-      await supabase.from('comptes').insert(payload)
+      await supabase.from('suivi_comptes_comptes').insert(payload)
     }
     await loadComptes()
     setShowModal(false)
@@ -65,16 +44,12 @@ export default function AccountsSettings() {
   }
 
   async function deleteAccount(id) {
-    await supabase.from('comptes').delete().eq('id', id)
+    await supabase.from('suivi_comptes_comptes').delete().eq('id', id)
     await loadComptes()
     setDeleteTarget(null)
   }
 
-  const grouped = comptes.reduce((acc, c) => {
-    if (!acc[c.type]) acc[c.type] = []
-    acc[c.type].push(c)
-    return acc
-  }, {})
+  const grouped = comptes.reduce((acc, c) => { if (!acc[c.type]) acc[c.type] = []; acc[c.type].push(c); return acc }, {})
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -83,9 +58,7 @@ export default function AccountsSettings() {
           <h1 className="text-2xl font-bold text-gray-900">Comptes</h1>
           <p className="text-sm text-gray-500 mt-1">Gérez vos comptes et soldes initiaux</p>
         </div>
-        <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm">
-          <Plus size={16} /> Nouveau compte
-        </button>
+        <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> Nouveau compte</button>
       </div>
 
       {Object.entries(grouped).map(([type, accounts]) => (
@@ -108,12 +81,8 @@ export default function AccountsSettings() {
                     </td>
                     <td className="px-4 py-3 w-16">
                       <div className="flex items-center gap-2">
-                        <button onClick={() => openEdit(c)} className="text-gray-300 hover:text-blue-500">
-                          <Pencil size={14} />
-                        </button>
-                        <button onClick={() => setDeleteTarget(c)} className="text-gray-300 hover:text-red-500">
-                          <Trash2 size={14} />
-                        </button>
+                        <button onClick={() => openEdit(c)} className="text-gray-300 hover:text-blue-500"><Pencil size={14} /></button>
+                        <button onClick={() => setDeleteTarget(c)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
                       </div>
                     </td>
                   </tr>
@@ -124,13 +93,8 @@ export default function AccountsSettings() {
         </div>
       ))}
 
-      {/* Add/Edit modal */}
       {showModal && (
-        <Modal
-          title={editing ? 'Modifier le compte' : 'Nouveau compte'}
-          onClose={() => setShowModal(false)}
-          size="sm"
-        >
+        <Modal title={editing ? 'Modifier le compte' : 'Nouveau compte'} onClose={() => setShowModal(false)} size="sm">
           <div className="space-y-3">
             <div>
               <label className="label">Nom *</label>
@@ -155,10 +119,7 @@ export default function AccountsSettings() {
               <input type="text" className="input" value={form.banque} onChange={e => setField('banque', e.target.value)} placeholder="ex: Argenta" />
             </div>
             <div>
-              <label className="label">
-                Solde initial (€)
-                <span className="text-gray-400 font-normal ml-1">— solde au démarrage du suivi</span>
-              </label>
+              <label className="label">Solde initial (€) <span className="text-gray-400 font-normal ml-1">— solde au démarrage du suivi</span></label>
               <input type="number" step="0.01" className="input" value={form.solde_initial} onChange={e => setField('solde_initial', e.target.value)} />
             </div>
             <div>
@@ -167,15 +128,12 @@ export default function AccountsSettings() {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button className="btn-secondary" onClick={() => setShowModal(false)}>Annuler</button>
-              <button className="btn-primary" onClick={save} disabled={saving || !form.nom}>
-                {saving ? 'Enregistrement…' : editing ? 'Mettre à jour' : 'Ajouter'}
-              </button>
+              <button className="btn-primary" onClick={save} disabled={saving || !form.nom}>{saving ? 'Enregistrement…' : editing ? 'Mettre à jour' : 'Ajouter'}</button>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* Delete confirm */}
       {deleteTarget && (
         <Modal title="Supprimer le compte" onClose={() => setDeleteTarget(null)} size="sm">
           <div className="space-y-3">

@@ -25,34 +25,25 @@ export default function SearchPage() {
     e?.preventDefault()
     setLoading(true)
     setSearched(true)
-
     let q = supabase
-      .from('transactions')
-      .select('*, comptes(nom), categories(parent, sous_categorie)')
-      .order('date', { ascending: false })
-      .limit(200)
-
+      .from('suivi_comptes_transactions')
+      .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
+      .order('date', { ascending: false }).limit(200)
     if (filterCompte) q = q.eq('compte_id', filterCompte)
     if (filterDateFrom) q = q.gte('date', filterDateFrom)
     if (filterDateTo) q = q.lte('date', filterDateTo)
-
     const { data } = await q
     let filtered = data || []
-
     if (query.trim()) {
       const q2 = query.toLowerCase().trim()
-      filtered = filtered.filter(t => {
-        const montantStr = Math.abs(parseFloat(t.montant)).toString()
-        return (
-          (t.tiers_nom || '').toLowerCase().includes(q2) ||
-          (t.categories?.parent || '').toLowerCase().includes(q2) ||
-          (t.categories?.sous_categorie || '').toLowerCase().includes(q2) ||
-          (t.notes || '').toLowerCase().includes(q2) ||
-          montantStr.includes(q2)
-        )
-      })
+      filtered = filtered.filter(t =>
+        (t.tiers_nom || '').toLowerCase().includes(q2) ||
+        (t.suivi_comptes_categories?.parent || '').toLowerCase().includes(q2) ||
+        (t.suivi_comptes_categories?.sous_categorie || '').toLowerCase().includes(q2) ||
+        (t.notes || '').toLowerCase().includes(q2) ||
+        Math.abs(parseFloat(t.montant)).toString().includes(q2)
+      )
     }
-
     setResults(filtered)
     setLoading(false)
   }
@@ -60,22 +51,15 @@ export default function SearchPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Recherche</h1>
-
       <form onSubmit={handleSearch} className="card space-y-3">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              className="input pl-9"
-              placeholder="Tiers, catégorie, montant, notes…"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-            />
+            <input type="text" className="input pl-9" placeholder="Tiers, catégorie, montant, notes…"
+              value={query} onChange={e => setQuery(e.target.value)} />
           </div>
           <button type="submit" className="btn-primary">Rechercher</button>
         </div>
-
         <div className="flex flex-wrap gap-2">
           <select className="input w-auto text-sm" value={filterCompte} onChange={e => setFilterCompte(e.target.value)}>
             <option value="">Tous les comptes</option>
@@ -83,25 +67,16 @@ export default function SearchPage() {
           </select>
           <input type="date" className="input w-auto text-sm" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} title="Date de début" />
           <input type="date" className="input w-auto text-sm" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} title="Date de fin" />
-          <button
-            type="button"
-            onClick={() => { setFilterCompte(''); setFilterDateFrom(''); setFilterDateTo(''); setQuery(''); setResults([]); setSearched(false) }}
-            className="text-sm text-emerald-600 hover:underline"
-          >
-            Réinitialiser
-          </button>
+          <button type="button" onClick={() => { setFilterCompte(''); setFilterDateFrom(''); setFilterDateTo(''); setQuery(''); setResults([]); setSearched(false) }}
+            className="text-sm text-emerald-600 hover:underline">Réinitialiser</button>
         </div>
       </form>
-
       {loading && <p className="text-gray-400 text-sm">Recherche…</p>}
-
       {searched && !loading && (
         <div>
           <p className="text-sm text-gray-500 mb-3">{results.length} résultat(s)</p>
           {results.length === 0 ? (
-            <div className="card text-center py-8">
-              <p className="text-gray-400">Aucun résultat pour cette recherche.</p>
-            </div>
+            <div className="card text-center py-8"><p className="text-gray-400">Aucun résultat pour cette recherche.</p></div>
           ) : (
             <div className="card p-0 overflow-hidden">
               <table className="w-full text-sm">
@@ -118,23 +93,17 @@ export default function SearchPage() {
                   {results.map(t => {
                     const montant = parseFloat(t.montant)
                     return (
-                      <tr
-                        key={t.id}
-                        className="hover:bg-gray-50 cursor-pointer"
-                        onClick={() => navigate(`/compte/${t.compte_id}`)}
-                      >
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                          {format(new Date(t.date), 'd MMM yyyy', { locale: fr })}
-                        </td>
+                      <tr key={t.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/compte/${t.compte_id}`)}>
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{format(new Date(t.date), 'd MMM yyyy', { locale: fr })}</td>
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{t.tiers_nom || '—'}</p>
                           {t.notes && <p className="text-xs text-gray-400 italic">{t.notes}</p>}
                         </td>
                         <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
-                          {t.categories?.parent || '—'}
-                          {t.categories?.sous_categorie && ` — ${t.categories.sous_categorie}`}
+                          {t.suivi_comptes_categories?.parent || '—'}
+                          {t.suivi_comptes_categories?.sous_categorie && ` — ${t.suivi_comptes_categories.sous_categorie}`}
                         </td>
-                        <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{t.comptes?.nom}</td>
+                        <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{t.suivi_comptes_comptes?.nom}</td>
                         <td className={`px-4 py-3 text-right font-semibold ${montant >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                           {montant >= 0 ? '+' : ''}{fmt(montant)}
                         </td>

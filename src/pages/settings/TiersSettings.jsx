@@ -14,31 +14,19 @@ export default function TiersSettings() {
   const [deleteTarget, setDeleteTarget] = useState(null)
 
   const parents = [...new Set(categories.map(c => c.parent))].sort()
+  const filtered = tiers.filter(t => t.nom.toLowerCase().includes(search.toLowerCase()))
 
-  const filtered = tiers.filter(t =>
-    t.nom.toLowerCase().includes(search.toLowerCase())
-  )
-
-  function openAdd() {
-    setEditing(null)
-    setForm({ nom: '', categorie_id: '' })
-    setShowModal(true)
-  }
-
-  function openEdit(t) {
-    setEditing(t)
-    setForm({ nom: t.nom, categorie_id: t.categorie_id || '' })
-    setShowModal(true)
-  }
+  function openAdd() { setEditing(null); setForm({ nom: '', categorie_id: '' }); setShowModal(true) }
+  function openEdit(t) { setEditing(t); setForm({ nom: t.nom, categorie_id: t.categorie_id || '' }); setShowModal(true) }
 
   async function save() {
     if (!form.nom.trim()) return
     setSaving(true)
     const payload = { nom: form.nom.trim(), categorie_id: form.categorie_id || null }
     if (editing) {
-      await supabase.from('tiers').update(payload).eq('id', editing.id)
+      await supabase.from('suivi_comptes_tiers').update(payload).eq('id', editing.id)
     } else {
-      await supabase.from('tiers').insert(payload)
+      await supabase.from('suivi_comptes_tiers').insert(payload)
     }
     await loadTiers()
     setShowModal(false)
@@ -46,7 +34,7 @@ export default function TiersSettings() {
   }
 
   async function deleteTiers(id) {
-    await supabase.from('tiers').delete().eq('id', id)
+    await supabase.from('suivi_comptes_tiers').delete().eq('id', id)
     await loadTiers()
     setDeleteTarget(null)
   }
@@ -57,7 +45,6 @@ export default function TiersSettings() {
     return c.sous_categorie ? `${c.parent} — ${c.sous_categorie}` : c.parent
   }
 
-  // Sub-categories for selected parent in form
   const selectedParent = categories.find(c => c.id === form.categorie_id)?.parent || ''
   const subCats = categories.filter(c => c.parent === selectedParent)
 
@@ -68,21 +55,12 @@ export default function TiersSettings() {
           <h1 className="text-2xl font-bold text-gray-900">Tiers</h1>
           <p className="text-sm text-gray-500 mt-1">Gérez vos payeurs et bénéficiaires</p>
         </div>
-        <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm">
-          <Plus size={16} /> Nouveau tiers
-        </button>
+        <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> Nouveau tiers</button>
       </div>
 
-      {/* Search */}
       <div className="relative">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          className="input pl-9"
-          placeholder="Rechercher un tiers…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+        <input type="text" className="input pl-9" placeholder="Rechercher un tiers…" value={search} onChange={e => setSearch(e.target.value)} />
       </div>
 
       {filtered.length === 0 ? (
@@ -107,12 +85,8 @@ export default function TiersSettings() {
                   <td className="px-4 py-3 text-gray-500">{catLabel(t.categorie_id)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <button onClick={() => openEdit(t)} className="text-gray-300 hover:text-blue-500">
-                        <Pencil size={14} />
-                      </button>
-                      <button onClick={() => setDeleteTarget(t)} className="text-gray-300 hover:text-red-500">
-                        <Trash2 size={14} />
-                      </button>
+                      <button onClick={() => openEdit(t)} className="text-gray-300 hover:text-blue-500"><Pencil size={14} /></button>
+                      <button onClick={() => setDeleteTarget(t)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -122,73 +96,40 @@ export default function TiersSettings() {
         </div>
       )}
 
-      {/* Add / Edit modal */}
       {showModal && (
-        <Modal
-          title={editing ? 'Modifier le tiers' : 'Nouveau tiers'}
-          onClose={() => setShowModal(false)}
-          size="sm"
-        >
+        <Modal title={editing ? 'Modifier le tiers' : 'Nouveau tiers'} onClose={() => setShowModal(false)} size="sm">
           <div className="space-y-3">
             <div>
               <label className="label">Nom *</label>
-              <input
-                type="text"
-                className="input"
-                value={form.nom}
-                onChange={e => setForm(f => ({ ...f, nom: e.target.value }))}
-                autoFocus
-                placeholder="ex: Colruyt"
-              />
+              <input type="text" className="input" value={form.nom} onChange={e => setForm(f => ({ ...f, nom: e.target.value }))} autoFocus placeholder="ex: Colruyt" />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="label">Catégorie</label>
-                <select
-                  className="input"
-                  value={selectedParent}
-                  onChange={e => {
-                    const cats = categories.filter(c => c.parent === e.target.value)
-                    setForm(f => ({ ...f, categorie_id: cats[0]?.id || '' }))
-                  }}
-                >
+                <select className="input" value={selectedParent}
+                  onChange={e => { const cats = categories.filter(c => c.parent === e.target.value); setForm(f => ({ ...f, categorie_id: cats[0]?.id || '' })) }}>
                   <option value="">— Aucune —</option>
                   {parents.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div>
                 <label className="label">Sous-catégorie</label>
-                <select
-                  className="input"
-                  value={form.categorie_id}
-                  onChange={e => setForm(f => ({ ...f, categorie_id: e.target.value }))}
-                  disabled={!selectedParent}
-                >
-                  {subCats.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.sous_categorie || '(aucune)'}
-                    </option>
-                  ))}
+                <select className="input" value={form.categorie_id} onChange={e => setForm(f => ({ ...f, categorie_id: e.target.value }))} disabled={!selectedParent}>
+                  {subCats.map(c => <option key={c.id} value={c.id}>{c.sous_categorie || '(aucune)'}</option>)}
                 </select>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button className="btn-secondary" onClick={() => setShowModal(false)}>Annuler</button>
-              <button className="btn-primary" onClick={save} disabled={saving || !form.nom}>
-                {saving ? 'Enregistrement…' : editing ? 'Mettre à jour' : 'Ajouter'}
-              </button>
+              <button className="btn-primary" onClick={save} disabled={saving || !form.nom}>{saving ? 'Enregistrement…' : editing ? 'Mettre à jour' : 'Ajouter'}</button>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* Delete confirm */}
       {deleteTarget && (
         <Modal title="Supprimer le tiers" onClose={() => setDeleteTarget(null)} size="sm">
-          <p className="text-gray-600 mb-4">
-            Supprimer <strong>{deleteTarget.nom}</strong> ?
-            Les transactions liées ne seront pas supprimées.
-          </p>
+          <p className="text-gray-600 mb-4">Supprimer <strong>{deleteTarget.nom}</strong> ? Les transactions liées ne seront pas supprimées.</p>
           <div className="flex justify-end gap-2">
             <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>Annuler</button>
             <button className="btn-danger" onClick={() => deleteTiers(deleteTarget.id)}>Supprimer</button>
