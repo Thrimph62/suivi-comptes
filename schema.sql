@@ -1,10 +1,9 @@
 -- ============================================================
--- SUIVI COMPTES - Schéma Supabase
+-- SUIVI COMPTES - Schéma Supabase (tables préfixées suivi_comptes_)
 -- Coller dans : Supabase > SQL Editor > New Query > Run
 -- ============================================================
 
--- 1. TABLE COMPTES
-CREATE TABLE IF NOT EXISTS comptes (
+CREATE TABLE IF NOT EXISTS suivi_comptes_comptes (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   nom TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'courant'
@@ -16,8 +15,7 @@ CREATE TABLE IF NOT EXISTS comptes (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. TABLE CATEGORIES
-CREATE TABLE IF NOT EXISTS categories (
+CREATE TABLE IF NOT EXISTS suivi_comptes_categories (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   parent TEXT NOT NULL,
   sous_categorie TEXT,
@@ -25,21 +23,19 @@ CREATE TABLE IF NOT EXISTS categories (
   UNIQUE(parent, sous_categorie)
 );
 
--- 3. TABLE TIERS
-CREATE TABLE IF NOT EXISTS tiers (
+CREATE TABLE IF NOT EXISTS suivi_comptes_tiers (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   nom TEXT NOT NULL UNIQUE,
-  categorie_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  categorie_id UUID REFERENCES suivi_comptes_categories(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. TABLE RECURRENCES (avant transactions car FK)
-CREATE TABLE IF NOT EXISTS recurrences (
+CREATE TABLE IF NOT EXISTS suivi_comptes_recurrences (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  compte_id UUID NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
-  tiers_id UUID REFERENCES tiers(id) ON DELETE SET NULL,
+  compte_id UUID NOT NULL REFERENCES suivi_comptes_comptes(id) ON DELETE CASCADE,
+  tiers_id UUID REFERENCES suivi_comptes_tiers(id) ON DELETE SET NULL,
   tiers_nom TEXT,
-  categorie_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  categorie_id UUID REFERENCES suivi_comptes_categories(id) ON DELETE SET NULL,
   montant DECIMAL(12,2) NOT NULL,
   frequence TEXT NOT NULL
     CHECK (frequence IN ('hebdomadaire','mensuel','annuel','personnalise')),
@@ -50,64 +46,47 @@ CREATE TABLE IF NOT EXISTS recurrences (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. TABLE TRANSACTIONS
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE IF NOT EXISTS suivi_comptes_transactions (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  compte_id UUID NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
+  compte_id UUID NOT NULL REFERENCES suivi_comptes_comptes(id) ON DELETE CASCADE,
   date DATE NOT NULL,
-  tiers_id UUID REFERENCES tiers(id) ON DELETE SET NULL,
+  tiers_id UUID REFERENCES suivi_comptes_tiers(id) ON DELETE SET NULL,
   tiers_nom TEXT,
-  categorie_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  categorie_id UUID REFERENCES suivi_comptes_categories(id) ON DELETE SET NULL,
   montant DECIMAL(12,2) NOT NULL,
   notes TEXT,
   pointee BOOLEAN DEFAULT FALSE,
-  recurrence_id UUID REFERENCES recurrences(id) ON DELETE SET NULL,
+  recurrence_id UUID REFERENCES suivi_comptes_recurrences(id) ON DELETE SET NULL,
+  transfer_id UUID,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================================
--- ROW LEVEL SECURITY (accès uniquement aux utilisateurs connectés)
+-- ROW LEVEL SECURITY
 -- ============================================================
+ALTER TABLE suivi_comptes_comptes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suivi_comptes_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suivi_comptes_tiers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suivi_comptes_recurrences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suivi_comptes_transactions ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE comptes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tiers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE recurrences ENABLE ROW LEVEL SECURITY;
-ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Acces authentifie" ON comptes FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON categories FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON tiers FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON recurrences FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON transactions FOR ALL USING (auth.role() = 'authenticated');
-
--- ============================================================
--- DONNÉES INITIALES - 13 COMPTES
--- ============================================================
-
-INSERT INTO comptes (nom, type, banque, pays, solde_initial, ordre) VALUES
-  ('Compte Courant Timothé', 'courant', 'Argenta', 'BE', 0, 1),
-  ('Compte Commun BE', 'courant', 'Argenta', 'BE', 0, 2),
-  ('Compte Commun FR', 'courant', 'Caisse d''Epargne', 'FR', 0, 3),
-  ('Livret A Timothé', 'epargne', 'Caisse d''Epargne', 'FR', 0, 4),
-  ('Livret A Justine', 'epargne', 'Caisse d''Epargne', 'FR', 0, 5),
-  ('Livret A Charlotte', 'epargne', 'Caisse d''Epargne', 'FR', 0, 6),
-  ('Epargne Pension Timothé', 'epargne', 'Argenta', 'BE', 0, 7),
-  ('Chèques Repas Timothé', 'cheques_repas', NULL, 'BE', 0, 8),
-  ('Chèques Repas Mathilde', 'cheques_repas', NULL, 'BE', 0, 9),
-  ('Titres Services', 'titres_services', NULL, 'BE', 0, 10);
+CREATE POLICY "Acces authentifie" ON suivi_comptes_comptes FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Acces authentifie" ON suivi_comptes_categories FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Acces authentifie" ON suivi_comptes_tiers FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Acces authentifie" ON suivi_comptes_recurrences FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Acces authentifie" ON suivi_comptes_transactions FOR ALL USING (auth.role() = 'authenticated');
 
 -- ============================================================
--- DONNÉES INITIALES - CATÉGORIES (vide, à remplir par l'utilisateur)
--- L'utilisateur les crée via Paramètres > Catégories
+-- DONNÉES INITIALES - 10 COMPTES
 -- ============================================================
-
--- Exemples commentés (décommenter si souhaité) :
--- INSERT INTO categories (parent, sous_categorie) VALUES
---   ('Alimentation', 'Supermarché'),
---   ('Alimentation', 'Boulangerie'),
---   ('Alimentation', 'Restaurant'),
---   ('Loisirs', 'Sport'),
---   ('Maison', 'Loyer'),
---   ('Salaire', NULL),
---   ('Virement Interne', NULL);
+INSERT INTO suivi_comptes_comptes (nom, type, banque, pays, solde_initial, ordre) VALUES
+  ('Compte Courant Timothé',  'courant',         'Argenta',           'BE', 0, 1),
+  ('Compte Commun BE',        'courant',         'Argenta',           'BE', 0, 2),
+  ('Compte Commun FR',        'courant',         'Caisse d''Epargne', 'FR', 0, 3),
+  ('Livret A Timothé',        'epargne',         'Caisse d''Epargne', 'FR', 0, 4),
+  ('Livret A Justine',        'epargne',         'Caisse d''Epargne', 'FR', 0, 5),
+  ('Livret A Charlotte',      'epargne',         'Caisse d''Epargne', 'FR', 0, 6),
+  ('Epargne Pension Timothé', 'epargne',         'Argenta',           'BE', 0, 7),
+  ('Chèques Repas Timothé',   'cheques_repas',   NULL,                'BE', 0, 8),
+  ('Chèques Repas Mathilde',  'cheques_repas',   NULL,                'BE', 0, 9),
+  ('Titres Services',         'titres_services', NULL,                'BE', 0, 10);
