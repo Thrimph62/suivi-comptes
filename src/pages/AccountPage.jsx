@@ -13,7 +13,7 @@ function fmt(n) {
 
 export default function AccountPage() {
   const { id } = useParams()
-  const { comptes, openTransactionModal } = useApp()
+  const { comptes, openTransactionModal, refreshTrigger } = useApp()
   const compte = comptes.find(c => c.id === id)
 
   const [transactions, setTransactions] = useState([])
@@ -24,7 +24,8 @@ export default function AccountPage() {
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
 
-  useEffect(() => { if (id) loadTransactions() }, [id])
+  // Reload whenever a transaction is saved via the modal
+  useEffect(() => { if (id) loadTransactions() }, [id, refreshTrigger])
 
   async function loadTransactions() {
     setLoading(true)
