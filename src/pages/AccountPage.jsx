@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -13,7 +13,7 @@ function fmt(n) {
 
 export default function AccountPage() {
   const { id } = useParams()
-  const { comptes, openTransactionModal, refreshTrigger } = useApp()
+  const { comptes, openTransactionModal } = useApp()
   const compte = comptes.find(c => c.id === id)
 
   const [transactions, setTransactions] = useState([])
@@ -24,10 +24,8 @@ export default function AccountPage() {
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
 
-  // Reload whenever a transaction is saved via the modal
-  useEffect(() => { if (id) loadTransactions() }, [id, refreshTrigger])
-
-  async function loadTransactions() {
+  const loadTransactions = useCallback(async () => {
+    if (!id) return
     setLoading(true)
     const { data } = await supabase
       .from('suivi_comptes_transactions')
@@ -37,17 +35,34 @@ export default function AccountPage() {
       .order('created_at', { ascending: false })
     setTransactions(data || [])
     setLoading(false)
-  }
+  }, [id])
+
+  // Initial load
+  useEffect(() => { loadTransactions() }, [loadTransactions])
+
+  // Realtime — auto-refresh on any insert / update / delete
+  useEffect(() => {
+    if (!id) return
+    const channel = supabase
+      .channel(`transactions-${id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'suivi_comptes_transactions', filter: `compte_id=eq.${id}` },
+        () => { loadTransactions() }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [id, loadTransactions])
 
   async function togglePointee(txn) {
     await supabase.from('suivi_comptes_transactions').update({ pointee: !txn.pointee }).eq('id', txn.id)
-    setTransactions(ts => ts.map(t => t.id === txn.id ? { ...t, pointee: !t.pointee } : t))
+    // realtime subscription will reload automatically
   }
 
   async function deleteTransaction(txn) {
     await supabase.from('suivi_comptes_transactions').delete().eq('id', txn.id)
-    setTransactions(ts => ts.filter(t => t.id !== txn.id))
     setDeleteConfirm(null)
+    // realtime subscription will reload automatically
   }
 
   if (!compte) return <p className="text-gray-500">Compte introuvable.</p>
