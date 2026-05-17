@@ -8,6 +8,7 @@ export function AppProvider({ children }) {
   const [categories, setCategories] = useState([])
   const [tiers, setTiers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   const [transactionModal, setTransactionModal] = useState({
     open: false, transaction: null, defaultCompteId: null,
@@ -43,8 +44,9 @@ export function AppProvider({ children }) {
     setTransactionModal({ open: true, transaction, defaultCompteId })
   }
 
-  function closeTransactionModal() {
+  function closeTransactionModal(saved = false) {
     setTransactionModal({ open: false, transaction: null, defaultCompteId: null })
+    if (saved) setRefreshTrigger(n => n + 1)
   }
 
   return (
@@ -53,6 +55,7 @@ export function AppProvider({ children }) {
       categories, loadCategories,
       tiers, loadTiers,
       loading,
+      refreshTrigger,
       transactionModal, openTransactionModal, closeTransactionModal,
     }}>
       {children}
