@@ -2,13 +2,27 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { CheckCircle2, Circle, Pencil, Trash2, Plus, Filter, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
+import {
+  CheckCircle2, Circle, Pencil, Trash2, Plus, Filter,
+  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Archive
+} from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
 import Modal from '../components/Modal'
 
 function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
+}
+
+function groupByYearMonth(transactions) {
+  return transactions.reduce((acc, t) => {
+    const year = t.date.slice(0, 4)
+    const month = t.date.slice(0, 7)
+    if (!acc[year]) acc[year] = {}
+    if (!acc[year][month]) acc[year][month] = []
+    acc[year][month].push(t)
+    return acc
+  }, {})
 }
 
 export default function AccountPage() {
@@ -19,11 +33,21 @@ export default function AccountPage() {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+
   const [expandedYears, setExpandedYears] = useState({})
   const [expandedMonths, setExpandedMonths] = useState({})
+  const [archivedExpanded, setArchivedExpanded] = useState(false)
+  const [expandedArchivedYears, setExpandedArchivedYears] = useState({})
+  const [expandedArchivedMonths, setExpandedArchivedMonths] = useState({})
+
+  // Persisted in Supabase
+  const [closedMonths, setClosedMonths] = useState(new Set())
+
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
+  const [filterPointe, setFilterPointe] = useState('toutes')
 
+  // ── Load transactions ──────────────────────────────────────
   const loadTransactions = useCallback(async () => {
     if (!id) return
     setLoading(true)
@@ -37,32 +61,61 @@ export default function AccountPage() {
     setLoading(false)
   }, [id])
 
-  // Initial load
-  useEffect(() => { loadTransactions() }, [loadTransactions])
+  // ── Load closed months from Supabase ──────────────────────
+  const loadClosedMonths = useCallback(async () => {
+    if (!id) return
+    const { data } = await supabase
+      .from('suivi_comptes_mois_clotures')
+      .select('mois')
+      .eq('compte_id', id)
+    if (data) setClosedMonths(new Set(data.map(r => r.mois)))
+  }, [id])
 
-  // Realtime — auto-refresh on any insert / update / delete
+  useEffect(() => {
+    loadTransactions()
+    loadClosedMonths()
+  }, [loadTransactions, loadClosedMonths])
+
+  // Realtime for transactions
   useEffect(() => {
     if (!id) return
     const channel = supabase
       .channel(`transactions-${id}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'suivi_comptes_transactions', filter: `compte_id=eq.${id}` },
-        () => { loadTransactions() }
-      )
+      .on('postgres_changes', {
+        event: '*', schema: 'public',
+        table: 'suivi_comptes_transactions',
+        filter: `compte_id=eq.${id}`,
+      }, () => { loadTransactions() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [id, loadTransactions])
 
   async function togglePointee(txn) {
     await supabase.from('suivi_comptes_transactions').update({ pointee: !txn.pointee }).eq('id', txn.id)
-    // realtime subscription will reload automatically
   }
 
   async function deleteTransaction(txn) {
     await supabase.from('suivi_comptes_transactions').delete().eq('id', txn.id)
     setDeleteConfirm(null)
-    // realtime subscription will reload automatically
+  }
+
+  // ── Toggle a month into/out of Pointage Terminé ───────────
+  async function toggleClosedMonth(monthKey) {
+    const isCurrentlyClosed = closedMonths.has(monthKey)
+    if (isCurrentlyClosed) {
+      await supabase
+        .from('suivi_comptes_mois_clotures')
+        .delete()
+        .eq('compte_id', id)
+        .eq('mois', monthKey)
+      setClosedMonths(prev => { const n = new Set(prev); n.delete(monthKey); return n })
+    } else {
+      await supabase
+        .from('suivi_comptes_mois_clotures')
+        .insert({ compte_id: id, mois: monthKey })
+      setClosedMonths(prev => new Set([...prev, monthKey]))
+      setExpandedMonths(e => ({ ...e, [monthKey]: false }))
+    }
   }
 
   if (!compte) return <p className="text-gray-500">Compte introuvable.</p>
@@ -76,49 +129,61 @@ export default function AccountPage() {
   const filtered = transactions.filter(t => {
     const monthMatch = !filterMonth || t.date.startsWith(filterMonth)
     const catMatch = !filterCat || t.suivi_comptes_categories?.parent === filterCat
-    return monthMatch && catMatch
+    const pointeMatch =
+      filterPointe === 'toutes' ? true :
+      filterPointe === 'pointees' ? t.pointee : !t.pointee
+    return monthMatch && catMatch && pointeMatch
   })
 
-  const groupedByYear = filtered.reduce((acc, t) => {
-    const year = t.date.slice(0, 4)
-    const month = t.date.slice(0, 7)
-    if (!acc[year]) acc[year] = {}
-    if (!acc[year][month]) acc[year][month] = []
-    acc[year][month].push(t)
-    return acc
-  }, {})
+  const mainTxns = filtered.filter(t => !closedMonths.has(t.date.slice(0, 7)))
+  const archivedTxns = filtered.filter(t => closedMonths.has(t.date.slice(0, 7)))
 
-  const sortedYears = Object.keys(groupedByYear).sort((a, b) => b.localeCompare(a))
-  const allMonthKeys = sortedYears.flatMap(y => Object.keys(groupedByYear[y]))
-  const everythingExpanded = sortedYears.every(y => expandedYears[y]) && allMonthKeys.every(m => expandedMonths[m])
+  const mainGrouped = groupByYearMonth(mainTxns)
+  const mainYears = Object.keys(mainGrouped).sort()
+
+  const archivedGrouped = groupByYearMonth(archivedTxns)
+  const archivedYears = Object.keys(archivedGrouped).sort()
+
+  const allMainMonthKeys = mainYears.flatMap(y => Object.keys(mainGrouped[y]))
+  const everythingExpanded =
+    mainYears.every(y => expandedYears[y]) &&
+    allMainMonthKeys.every(m => expandedMonths[m])
 
   function expandAll() {
     const years = {}, months = {}
-    sortedYears.forEach(y => {
+    mainYears.forEach(y => {
       years[y] = true
-      Object.keys(groupedByYear[y]).forEach(m => { months[m] = true })
+      Object.keys(mainGrouped[y]).forEach(m => { months[m] = true })
     })
     setExpandedYears(years)
     setExpandedMonths(months)
   }
 
-  function collapseAll() {
-    setExpandedYears({})
-    setExpandedMonths({})
-  }
+  function collapseAll() { setExpandedYears({}); setExpandedMonths({}) }
 
   function toggleYear(year) {
     const isOpen = !!expandedYears[year]
     setExpandedYears(e => ({ ...e, [year]: !isOpen }))
     if (isOpen) {
       const months = {}
-      Object.keys(groupedByYear[year]).forEach(m => { months[m] = false })
+      Object.keys(mainGrouped[year] || {}).forEach(m => { months[m] = false })
       setExpandedMonths(e => ({ ...e, ...months }))
+    }
+  }
+
+  function toggleArchivedYear(year) {
+    const isOpen = !!expandedArchivedYears[year]
+    setExpandedArchivedYears(e => ({ ...e, [year]: !isOpen }))
+    if (isOpen) {
+      const months = {}
+      Object.keys(archivedGrouped[year] || {}).forEach(m => { months[m] = false })
+      setExpandedArchivedMonths(e => ({ ...e, ...months }))
     }
   }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{compte.nom}</h1>
@@ -129,6 +194,7 @@ export default function AccountPage() {
         </button>
       </div>
 
+      {/* Balance cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="card">
           <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde théorique</p>
@@ -144,6 +210,7 @@ export default function AccountPage() {
         </div>
       </div>
 
+      {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
         <Filter size={16} className="text-gray-400" />
         <input type="month" className="input w-auto text-sm" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} />
@@ -151,97 +218,225 @@ export default function AccountPage() {
           <option value="">Toutes catégories</option>
           {cats.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        {(filterMonth || filterCat) && (
-          <button onClick={() => { setFilterMonth(''); setFilterCat('') }} className="text-sm text-emerald-600 hover:underline">Effacer filtres</button>
+        <select className="input w-auto text-sm" value={filterPointe} onChange={e => setFilterPointe(e.target.value)}>
+          <option value="toutes">Toutes</option>
+          <option value="pointees">Pointées ✓</option>
+          <option value="non_pointees">Non pointées ○</option>
+        </select>
+        {(filterMonth || filterCat || filterPointe !== 'toutes') && (
+          <button onClick={() => { setFilterMonth(''); setFilterCat(''); setFilterPointe('toutes') }}
+            className="text-sm text-emerald-600 hover:underline">Effacer filtres</button>
         )}
         <span className="text-xs text-gray-400 ml-auto">{filtered.length} transaction(s)</span>
       </div>
 
       {loading ? (
         <p className="text-gray-400">Chargement…</p>
-      ) : filtered.length === 0 ? (
+      ) : mainTxns.length === 0 && archivedTxns.length === 0 ? (
         <div className="card text-center py-8">
           <p className="text-gray-400">Aucune transaction.</p>
           <button onClick={() => openTransactionModal(id)} className="btn-primary mt-3">Ajouter la première transaction</button>
         </div>
       ) : (
         <>
-          <div className="flex justify-end">
-            <button onClick={everythingExpanded ? collapseAll : expandAll}
-              className="flex items-center gap-1 text-xs text-emerald-600 hover:underline">
-              {everythingExpanded ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
-              {everythingExpanded ? 'Tout replier' : 'Tout déplier'}
-            </button>
-          </div>
-
-          {sortedYears.map(year => {
-            const yearMonths = groupedByYear[year]
-            const sortedMonths = Object.keys(yearMonths).sort((a, b) => b.localeCompare(a))
-            const yearTotal = sortedMonths.reduce((s, m) => s + yearMonths[m].reduce((ms, t) => ms + parseFloat(t.montant), 0), 0)
-            const yearCount = sortedMonths.reduce((s, m) => s + yearMonths[m].length, 0)
-            const isYearOpen = !!expandedYears[year]
-
-            return (
-              <div key={year} className="space-y-1">
-                <button
-                  className="w-full flex items-center justify-between py-2.5 px-3 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
-                  onClick={() => toggleYear(year)}
-                >
-                  <div className="flex items-center gap-2">
-                    {isYearOpen ? <ChevronDown size={17} className="text-gray-500" /> : <ChevronRight size={17} className="text-gray-500" />}
-                    <span className="font-bold text-gray-800 text-base">{year}</span>
-                    <span className="text-xs text-gray-500">({yearCount} transaction{yearCount > 1 ? 's' : ''})</span>
-                  </div>
-                  <span className={`font-bold text-sm ${yearTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {yearTotal >= 0 ? '+' : ''}{fmt(yearTotal)}
-                  </span>
+          {/* ── Main section ── */}
+          {mainTxns.length > 0 && (
+            <>
+              <div className="flex justify-end">
+                <button onClick={everythingExpanded ? collapseAll : expandAll}
+                  className="flex items-center gap-1 text-xs text-emerald-600 hover:underline">
+                  {everythingExpanded ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+                  {everythingExpanded ? 'Tout replier' : 'Tout déplier'}
                 </button>
-
-                {isYearOpen && (
-                  <div className="ml-4 space-y-1">
-                    {sortedMonths.map(month => {
-                      const txns = yearMonths[month]
-                      const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
-                      const isMonthOpen = !!expandedMonths[month]
-                      return (
-                        <div key={month}>
-                          <button
-                            className="w-full flex items-center justify-between py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"
-                            onClick={() => setExpandedMonths(e => ({ ...e, [month]: !e[month] }))}
-                          >
-                            <div className="flex items-center gap-2">
-                              {isMonthOpen ? <ChevronDown size={15} className="text-gray-400" /> : <ChevronRight size={15} className="text-gray-400" />}
-                              <span className="text-sm font-semibold text-gray-600 capitalize">
-                                {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
-                              </span>
-                              <span className="text-xs text-gray-400">({txns.length})</span>
-                            </div>
-                            <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                              {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
-                            </span>
-                          </button>
-                          {isMonthOpen && (
-                            <div className="card p-0 overflow-hidden mt-1 mb-2">
-                              <table className="w-full text-sm">
-                                <tbody className="divide-y divide-gray-50">
-                                  {txns.map(t => (
-                                    <TransactionRow key={t.id} t={t}
-                                      onToggle={() => togglePointee(t)}
-                                      onEdit={() => openTransactionModal(id, t)}
-                                      onDelete={() => setDeleteConfirm(t)} />
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
               </div>
-            )
-          })}
+
+              {mainYears.map(year => {
+                const yearMonths = mainGrouped[year]
+                const sortedMonths = Object.keys(yearMonths).sort()
+                const yearTotal = sortedMonths.reduce((s, m) => s + yearMonths[m].reduce((ms, t) => ms + parseFloat(t.montant), 0), 0)
+                const yearCount = sortedMonths.reduce((s, m) => s + yearMonths[m].length, 0)
+                const isYearOpen = !!expandedYears[year]
+
+                return (
+                  <div key={year} className="space-y-1">
+                    <button
+                      className="w-full flex items-center justify-between py-2.5 px-3 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+                      onClick={() => toggleYear(year)}
+                    >
+                      <div className="flex items-center gap-2">
+                        {isYearOpen ? <ChevronDown size={17} className="text-gray-500" /> : <ChevronRight size={17} className="text-gray-500" />}
+                        <span className="font-bold text-gray-800 text-base">{year}</span>
+                        <span className="text-xs text-gray-500">({yearCount} transaction{yearCount > 1 ? 's' : ''})</span>
+                      </div>
+                      <span className={`font-bold text-sm ${yearTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                        {yearTotal >= 0 ? '+' : ''}{fmt(yearTotal)}
+                      </span>
+                    </button>
+
+                    {isYearOpen && (
+                      <div className="ml-4 space-y-1">
+                        {sortedMonths.map(month => {
+                          const txns = [...yearMonths[month]].sort((a, b) => b.date.localeCompare(a.date))
+                          const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
+                          const isMonthOpen = !!expandedMonths[month]
+
+                          return (
+                            <div key={month}>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={false}
+                                  onChange={() => toggleClosedMonth(month)}
+                                  className="w-4 h-4 text-emerald-600 rounded shrink-0 cursor-pointer"
+                                  title="Marquer comme Pointage Terminé"
+                                />
+                                <button
+                                  className="flex-1 flex items-center justify-between py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                                  onClick={() => setExpandedMonths(e => ({ ...e, [month]: !e[month] }))}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    {isMonthOpen ? <ChevronDown size={15} className="text-gray-400" /> : <ChevronRight size={15} className="text-gray-400" />}
+                                    <span className="text-sm font-semibold text-gray-600 capitalize">
+                                      {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                                    </span>
+                                    <span className="text-xs text-gray-400">({txns.length})</span>
+                                  </div>
+                                  <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                    {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
+                                  </span>
+                                </button>
+                              </div>
+
+                              {isMonthOpen && (
+                                <div className="card p-0 overflow-hidden mt-1 mb-2 ml-6">
+                                  <table className="w-full text-sm">
+                                    <tbody className="divide-y divide-gray-50">
+                                      {txns.map(t => (
+                                        <TransactionRow key={t.id} t={t}
+                                          onToggle={() => togglePointee(t)}
+                                          onEdit={() => openTransactionModal(id, t)}
+                                          onDelete={() => setDeleteConfirm(t)} />
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </>
+          )}
+
+          {/* ── Pointage Terminé section ── */}
+          {archivedTxns.length > 0 && (
+            <div className="mt-4">
+              <button
+                className="w-full flex items-center justify-between py-3 px-4 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+                onClick={() => setArchivedExpanded(v => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  {archivedExpanded ? <ChevronDown size={17} className="text-slate-500" /> : <ChevronRight size={17} className="text-slate-500" />}
+                  <Archive size={16} className="text-slate-500" />
+                  <span className="font-bold text-slate-700">Pointage Terminé</span>
+                  <span className="text-xs text-slate-500">
+                    ({closedMonths.size} mois · {archivedTxns.length} transaction{archivedTxns.length > 1 ? 's' : ''})
+                  </span>
+                </div>
+                <span className={`font-bold text-sm ${archivedTxns.reduce((s, t) => s + parseFloat(t.montant), 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {(() => { const tot = archivedTxns.reduce((s, t) => s + parseFloat(t.montant), 0); return `${tot >= 0 ? '+' : ''}${fmt(tot)}` })()}
+                </span>
+              </button>
+
+              {archivedExpanded && (
+                <div className="mt-2 space-y-1">
+                  {archivedYears.map(year => {
+                    const yearMonths = archivedGrouped[year]
+                    const sortedMonths = Object.keys(yearMonths).sort()
+                    const yearTotal = sortedMonths.reduce((s, m) => s + yearMonths[m].reduce((ms, t) => ms + parseFloat(t.montant), 0), 0)
+                    const yearCount = sortedMonths.reduce((s, m) => s + yearMonths[m].length, 0)
+                    const isYearOpen = !!expandedArchivedYears[year]
+
+                    return (
+                      <div key={year} className="space-y-1">
+                        <button
+                          className="w-full flex items-center justify-between py-2 px-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors"
+                          onClick={() => toggleArchivedYear(year)}
+                        >
+                          <div className="flex items-center gap-2">
+                            {isYearOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                            <span className="font-bold text-slate-700">{year}</span>
+                            <span className="text-xs text-slate-400">({yearCount} transaction{yearCount > 1 ? 's' : ''})</span>
+                          </div>
+                          <span className={`font-bold text-sm ${yearTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                            {yearTotal >= 0 ? '+' : ''}{fmt(yearTotal)}
+                          </span>
+                        </button>
+
+                        {isYearOpen && (
+                          <div className="ml-4 space-y-1">
+                            {sortedMonths.map(month => {
+                              const txns = [...yearMonths[month]].sort((a, b) => a.date.localeCompare(b.date))
+                              const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
+                              const isMonthOpen = !!expandedArchivedMonths[month]
+
+                              return (
+                                <div key={month}>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={true}
+                                      onChange={() => toggleClosedMonth(month)}
+                                      className="w-4 h-4 text-emerald-600 rounded shrink-0 cursor-pointer"
+                                      title="Retirer du Pointage Terminé"
+                                    />
+                                    <button
+                                      className="flex-1 flex items-center justify-between py-2 px-2 hover:bg-slate-50 rounded-lg transition-colors"
+                                      onClick={() => setExpandedArchivedMonths(e => ({ ...e, [month]: !e[month] }))}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        {isMonthOpen ? <ChevronDown size={15} className="text-slate-400" /> : <ChevronRight size={15} className="text-slate-400" />}
+                                        <span className="text-sm font-semibold text-slate-500 capitalize">
+                                          {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                                        </span>
+                                        <span className="text-xs text-slate-400">({txns.length})</span>
+                                      </div>
+                                      <span className={`text-sm font-semibold ${monthTotal >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                        {monthTotal >= 0 ? '+' : ''}{fmt(monthTotal)}
+                                      </span>
+                                    </button>
+                                  </div>
+
+                                  {isMonthOpen && (
+                                    <div className="card p-0 overflow-hidden mt-1 mb-2 ml-6 opacity-75">
+                                      <table className="w-full text-sm">
+                                        <tbody className="divide-y divide-gray-50">
+                                          {txns.map(t => (
+                                            <TransactionRow key={t.id} t={t}
+                                              onToggle={() => togglePointee(t)}
+                                              onEdit={() => openTransactionModal(id, t)}
+                                              onDelete={() => setDeleteConfirm(t)} />
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 
