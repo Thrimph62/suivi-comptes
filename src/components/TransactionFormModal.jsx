@@ -41,17 +41,14 @@ export default function TransactionFormModal() {
   const { open, transaction, defaultCompteId } = transactionModal
 
   const [mode, setMode] = useState('transaction')
-
   const [form, setForm] = useState({})
   const [isRecurrent, setIsRecurrent] = useState(false)
   const [recForm, setRecForm] = useState({ frequence: 'mensuel', intervalle_jours: 7, date_fin: '' })
   const [tierSearch, setTierSearch] = useState('')
   const [tierDropdown, setTierDropdown] = useState(false)
-
   const [transfer, setTransfer] = useState({ from: '', to: '', montant: '', date: today(), notes: '' })
   const [isTransferRecurrent, setIsTransferRecurrent] = useState(false)
   const [transferRecForm, setTransferRecForm] = useState({ frequence: 'mensuel', intervalle_jours: 7, date_fin: '' })
-
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -77,8 +74,7 @@ export default function TransactionFormModal() {
     } else {
       setForm({
         compte_id: defaultCompteId || comptes[0]?.id || '',
-        date: today(),
-        tiers_id: '', tiers_nom: '', categorie_id: '', montant: '', notes: '', pointee: false,
+        date: today(), tiers_id: '', tiers_nom: '', categorie_id: '', montant: '', notes: '', pointee: false,
       })
       setTransfer({
         from: defaultCompteId || comptes[0]?.id || '',
@@ -118,6 +114,7 @@ export default function TransactionFormModal() {
     return data?.id || null
   }
 
+  // ── Save transfer ────────────────────────────────────────
   async function saveTransfer() {
     if (!transfer.from || !transfer.to || !transfer.montant) {
       setError('Veuillez remplir tous les champs obligatoires.')
@@ -152,10 +149,8 @@ export default function TransactionFormModal() {
         }).select().single()
 
         const dates = generateOccurrences({
-          date_debut: transfer.date,
-          date_fin: transferRecForm.date_fin || null,
-          frequence: transferRecForm.frequence,
-          intervalle_jours: parseInt(transferRecForm.intervalle_jours),
+          date_debut: transfer.date, date_fin: transferRecForm.date_fin || null,
+          frequence: transferRecForm.frequence, intervalle_jours: parseInt(transferRecForm.intervalle_jours),
         })
         const txns = dates.flatMap(d => {
           const transferId = crypto.randomUUID()
@@ -174,7 +169,7 @@ export default function TransactionFormModal() {
         ])
         if (error) throw error
       }
-      closeTransactionModal()
+      closeTransactionModal(true) // ← triggers refresh
     } catch (err) {
       setError(err.message || 'Erreur lors du virement.')
     } finally {
@@ -182,6 +177,7 @@ export default function TransactionFormModal() {
     }
   }
 
+  // ── Save transaction ─────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true)
@@ -226,7 +222,7 @@ export default function TransactionFormModal() {
         })
         if (error) throw error
       }
-      closeTransactionModal()
+      closeTransactionModal(true) // ← triggers refresh
     } catch (err) {
       setError(err.message || 'Erreur lors de la sauvegarde.')
     } finally {
@@ -237,7 +233,7 @@ export default function TransactionFormModal() {
   const isEditing = !!transaction
 
   return (
-    <Modal title={isEditing ? 'Modifier la transaction' : 'Nouvelle opération'} onClose={closeTransactionModal} size="md">
+    <Modal title={isEditing ? 'Modifier la transaction' : 'Nouvelle opération'} onClose={() => closeTransactionModal(false)} size="md">
       {!isEditing && (
         <div className="flex rounded-lg border border-gray-200 overflow-hidden mb-5">
           <button type="button" onClick={() => setMode('transaction')}
@@ -321,7 +317,7 @@ export default function TransactionFormModal() {
           </div>
           {error && <p className="text-red-500 text-sm">{error}</p>}
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-            <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
+            <button type="button" className="btn-secondary" onClick={() => closeTransactionModal(false)}>Annuler</button>
             <button type="button" className="btn-primary" onClick={saveTransfer} disabled={saving}>
               {saving ? 'Enregistrement…' : isTransferRecurrent ? 'Créer les virements récurrents' : 'Effectuer le virement'}
             </button>
@@ -443,7 +439,7 @@ export default function TransactionFormModal() {
           )}
           {error && <p className="text-red-500 text-sm">{error}</p>}
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-            <button type="button" className="btn-secondary" onClick={closeTransactionModal}>Annuler</button>
+            <button type="button" className="btn-secondary" onClick={() => closeTransactionModal(false)}>Annuler</button>
             <button type="submit" className="btn-primary" disabled={saving}>
               {saving ? 'Enregistrement…' : isEditing ? 'Mettre à jour' : 'Enregistrer'}
             </button>
