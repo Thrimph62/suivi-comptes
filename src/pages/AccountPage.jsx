@@ -180,9 +180,9 @@ export default function AccountPage() {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {/* Solde à ce jour */}
+        {/* Solde théorique */}
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde à ce jour</p>
+          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde théorique</p>
           <p className={`text-2xl font-bold mt-1 ${soldeAujourdhui >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{fmt(soldeAujourdhui)}</p>
         </div>
 
