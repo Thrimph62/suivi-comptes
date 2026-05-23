@@ -124,7 +124,7 @@ export default function Dashboard() {
       <div className="card bg-gradient-to-r from-emerald-600 to-emerald-700 text-white border-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">Solde à ce jour</p>
+            <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">Solde théorique</p>
             <p className="text-5xl font-bold mt-1">{fmt(totalAujourdhui)}</p>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
               <span className="text-emerald-100">
@@ -177,7 +177,7 @@ export default function Dashboard() {
                 <p className={`text-2xl font-bold mt-2 ${bal.aujourdhui >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
                   {fmt(bal.aujourdhui)}
                 </p>
-                <p className="text-xs text-gray-400 mt-0.5">Solde à ce jour</p>
+                <p className="text-xs text-gray-400 mt-0.5">Solde théorique</p>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
                   <span className="text-gray-500">
                     Pointé : <span className="font-medium text-emerald-600">{fmt(bal.pointe)}</span>
