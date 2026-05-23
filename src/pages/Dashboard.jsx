@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format, startOfMonth, endOfMonth, addDays, addMonths, addYears } from 'date-fns'
+import { format, startOfMonth, endOfMonth, addMonths, addYears } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { ArrowRight } from 'lucide-react'
@@ -10,17 +10,14 @@ import { useApp } from '../contexts/AppContext'
 function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
 }
-
-function fmtDiff(n) {
-  return `${n >= 0 ? '+' : ''}${fmt(n)}`
-}
+function fmtDiff(n) { return `${n >= 0 ? '+' : ''}${fmt(n)}` }
 
 export default function Dashboard() {
   const { comptes } = useApp()
   const [balances, setBalances] = useState({})
+  const [projections, setProjections] = useState({})
   const [recentTxns, setRecentTxns] = useState([])
   const [chartData, setChartData] = useState([])
-  const [projections, setProjections] = useState({}) // { compteId: { m1, m3, m12 } }
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
@@ -28,63 +25,69 @@ export default function Dashboard() {
 
   async function loadData() {
     setLoading(true)
-    const ids = comptes.map(c => c.id)
     const todayStr = format(new Date(), 'yyyy-MM-dd')
-    const in1m = format(addMonths(new Date(), 1), 'yyyy-MM-dd')
-    const in3m = format(addMonths(new Date(), 3), 'yyyy-MM-dd')
-    const in1y = format(addYears(new Date(), 1), 'yyyy-MM-dd')
+    const in1m  = format(addMonths(new Date(), 1), 'yyyy-MM-dd')
+    const in3m  = format(addMonths(new Date(), 3), 'yyyy-MM-dd')
+    const in1y  = format(addYears(new Date(), 1),  'yyyy-MM-dd')
 
-    // All transactions ever
-    const { data: allTxns } = await supabase
-      .from('suivi_comptes_transactions')
-      .select('compte_id, montant, pointee, date')
-      .in('compte_id', ids)
+    // ── One query per account (no row limit issue) ──────────
+    const results = await Promise.all(
+      comptes.map(c =>
+        supabase
+          .from('suivi_comptes_transactions')
+          .select('montant, pointee, date')
+          .eq('compte_id', c.id)
+      )
+    )
 
-    // Compute balances per account
     const bal = {}
-    for (const c of comptes) {
-      const txns = (allTxns || []).filter(t => t.compte_id === c.id)
-      const todayTxns = txns.filter(t => t.date <= todayStr)
-      const soldeAujourdhui = parseFloat(c.solde_initial) + todayTxns.reduce((s, t) => s + parseFloat(t.montant), 0)
-      const soldePointe = parseFloat(c.solde_initial) + txns.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
+    const proj = {}
+
+    comptes.forEach((c, i) => {
+      const txns = results[i].data || []
+      const base = parseFloat(c.solde_initial)
+
+      const soldeAujourdhui = base + txns
+        .filter(t => t.date <= todayStr)
+        .reduce((s, t) => s + parseFloat(t.montant), 0)
+
+      const soldePointe = base + txns
+        .filter(t => t.pointee)
+        .reduce((s, t) => s + parseFloat(t.montant), 0)
+
       bal[c.id] = {
         aujourdhui: soldeAujourdhui,
-        pointe: soldePointe,
-        nonPointe: soldeAujourdhui - soldePointe,
+        pointe:     soldePointe,
+        nonPointe:  soldeAujourdhui - soldePointe,
       }
-    }
-    setBalances(bal)
 
-    // Projections per account
-    const proj = {}
-    for (const c of comptes) {
-      const txns = (allTxns || []).filter(t => t.compte_id === c.id)
-      const base = parseFloat(c.solde_initial)
       proj[c.id] = {
-        m1: base + txns.filter(t => t.date <= in1m).reduce((s, t) => s + parseFloat(t.montant), 0),
-        m3: base + txns.filter(t => t.date <= in3m).reduce((s, t) => s + parseFloat(t.montant), 0),
-        m12: base + txns.filter(t => t.date <= in1y).reduce((s, t) => s + parseFloat(t.montant), 0),
+        m1:  base + txns.filter(t => t.date <= in1m).reduce((s, t) => s + parseFloat(t.montant), 0),
+        m3:  base + txns.filter(t => t.date <= in3m).reduce((s, t) => s + parseFloat(t.montant), 0),
+        m12: base + txns.filter(t => t.date <= in1y).reduce((s, t)  => s + parseFloat(t.montant), 0),
       }
-    }
+    })
+
+    setBalances(bal)
     setProjections(proj)
 
-    // Recent transactions
+    // ── Recent transactions (last 10) ───────────────────────
     const { data: recent } = await supabase
       .from('suivi_comptes_transactions')
       .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
-      .in('compte_id', ids)
+      .in('compte_id', comptes.map(c => c.id))
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(10)
     setRecentTxns(recent || [])
 
-    // Spending by category this month
+    // ── Spending by category this month ─────────────────────
     const mStart = format(startOfMonth(new Date()), 'yyyy-MM-dd')
-    const mEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd')
+    const mEnd   = format(endOfMonth(new Date()),   'yyyy-MM-dd')
     const { data: monthTxns } = await supabase
       .from('suivi_comptes_transactions')
       .select('montant, suivi_comptes_categories(parent)')
-      .in('compte_id', ids)
+      .in('compte_id', comptes.map(c => c.id))
       .gte('date', mStart).lte('date', mEnd).lt('montant', 0)
     const byCategory = {}
     for (const t of (monthTxns || [])) {
@@ -100,14 +103,13 @@ export default function Dashboard() {
     setLoading(false)
   }
 
-  // Global totals
+  // ── Global totals ────────────────────────────────────────
   const totalAujourdhui = comptes.reduce((s, c) => s + (balances[c.id]?.aujourdhui || 0), 0)
-  const totalPointe = comptes.reduce((s, c) => s + (balances[c.id]?.pointe || 0), 0)
-  const totalNonPointe = totalAujourdhui - totalPointe
-
-  const totalM1 = comptes.reduce((s, c) => s + (projections[c.id]?.m1 || 0), 0)
-  const totalM3 = comptes.reduce((s, c) => s + (projections[c.id]?.m3 || 0), 0)
-  const totalM12 = comptes.reduce((s, c) => s + (projections[c.id]?.m12 || 0), 0)
+  const totalPointe     = comptes.reduce((s, c) => s + (balances[c.id]?.pointe     || 0), 0)
+  const totalNonPointe  = totalAujourdhui - totalPointe
+  const totalM1         = comptes.reduce((s, c) => s + (projections[c.id]?.m1  || 0), 0)
+  const totalM3         = comptes.reduce((s, c) => s + (projections[c.id]?.m3  || 0), 0)
+  const totalM12        = comptes.reduce((s, c) => s + (projections[c.id]?.m12 || 0), 0)
 
   const COLORS = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316']
 
@@ -121,7 +123,6 @@ export default function Dashboard() {
       {/* ── Hero KPI ── */}
       <div className="card bg-gradient-to-r from-emerald-600 to-emerald-700 text-white border-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-          {/* Left — soldes */}
           <div>
             <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">Solde à ce jour</p>
             <p className="text-5xl font-bold mt-1">{fmt(totalAujourdhui)}</p>
@@ -134,14 +135,12 @@ export default function Dashboard() {
               </span>
             </div>
           </div>
-
-          {/* Right — projections */}
           <div className="sm:text-right bg-emerald-700/50 rounded-xl px-4 py-3 shrink-0 min-w-[200px]">
             <p className="text-emerald-200 text-xs font-medium uppercase tracking-wide mb-2">Projections</p>
             <div className="space-y-1.5">
               {[
-                { label: '1 mois', val: totalM1 },
-                { label: '3 mois', val: totalM3 },
+                { label: '1 mois', val: totalM1  },
+                { label: '3 mois', val: totalM3  },
                 { label: '1 an',   val: totalM12 },
               ].map(({ label, val }) => (
                 <div key={label} className="flex sm:justify-end items-center gap-3">
@@ -162,7 +161,7 @@ export default function Dashboard() {
         <h2 className="text-lg font-semibold text-gray-800 mb-3">Soldes des comptes</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {comptes.map(c => {
-            const bal = balances[c.id]
+            const bal  = balances[c.id]
             const proj = projections[c.id]
             if (!bal) return null
             return (
@@ -175,31 +174,23 @@ export default function Dashboard() {
                   </div>
                   <ArrowRight size={16} className="text-gray-300 group-hover:text-emerald-500 transition-colors mt-1 shrink-0" />
                 </div>
-
-                {/* Solde à ce jour — main figure */}
                 <p className={`text-2xl font-bold mt-2 ${bal.aujourdhui >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
                   {fmt(bal.aujourdhui)}
                 </p>
                 <p className="text-xs text-gray-400 mt-0.5">Solde à ce jour</p>
-
-                {/* Pointé + non pointé */}
                 <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
                   <span className="text-gray-500">
                     Pointé : <span className="font-medium text-emerald-600">{fmt(bal.pointe)}</span>
                   </span>
                   {Math.abs(bal.nonPointe) > 0.01 && (
-                    <span className="text-amber-500 font-medium">
-                      Non pointé : {fmtDiff(bal.nonPointe)}
-                    </span>
+                    <span className="text-amber-500 font-medium">Non pointé : {fmtDiff(bal.nonPointe)}</span>
                   )}
                 </div>
-
-                {/* Projections */}
                 {proj && (
                   <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
                     {[
-                      { label: '1 mois', val: proj.m1 },
-                      { label: '3 mois', val: proj.m3 },
+                      { label: '1 mois', val: proj.m1  },
+                      { label: '3 mois', val: proj.m3  },
                       { label: '1 an',   val: proj.m12 },
                     ].map(({ label, val }) => (
                       <div key={label} className="flex items-center justify-between">
@@ -244,7 +235,6 @@ export default function Dashboard() {
             </ul>
           )}
         </div>
-
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">
             Dépenses du mois — {format(new Date(), 'MMMM yyyy', { locale: fr })}
