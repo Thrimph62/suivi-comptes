@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { format } from 'date-fns'
+import { format, addMonths, addYears } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import {
   CheckCircle2, Circle, Pencil, Trash2, Plus, Filter,
@@ -13,6 +13,7 @@ import Modal from '../components/Modal'
 function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
 }
+function fmtDiff(n) { return `${n >= 0 ? '+' : ''}${fmt(n)}` }
 
 function groupByYearMonth(transactions) {
   return transactions.reduce((acc, t) => {
@@ -39,15 +40,12 @@ export default function AccountPage() {
   const [archivedExpanded, setArchivedExpanded] = useState(false)
   const [expandedArchivedYears, setExpandedArchivedYears] = useState({})
   const [expandedArchivedMonths, setExpandedArchivedMonths] = useState({})
-
-  // Persisted in Supabase
   const [closedMonths, setClosedMonths] = useState(new Set())
 
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
   const [filterPointe, setFilterPointe] = useState('toutes')
 
-  // ── Load transactions ──────────────────────────────────────
   const loadTransactions = useCallback(async () => {
     if (!id) return
     setLoading(true)
@@ -61,7 +59,6 @@ export default function AccountPage() {
     setLoading(false)
   }, [id])
 
-  // ── Load closed months from Supabase ──────────────────────
   const loadClosedMonths = useCallback(async () => {
     if (!id) return
     const { data } = await supabase
@@ -76,7 +73,6 @@ export default function AccountPage() {
     loadClosedMonths()
   }, [loadTransactions, loadClosedMonths])
 
-  // Realtime for transactions
   useEffect(() => {
     if (!id) return
     const channel = supabase
@@ -99,20 +95,13 @@ export default function AccountPage() {
     setDeleteConfirm(null)
   }
 
-  // ── Toggle a month into/out of Pointage Terminé ───────────
   async function toggleClosedMonth(monthKey) {
     const isCurrentlyClosed = closedMonths.has(monthKey)
     if (isCurrentlyClosed) {
-      await supabase
-        .from('suivi_comptes_mois_clotures')
-        .delete()
-        .eq('compte_id', id)
-        .eq('mois', monthKey)
+      await supabase.from('suivi_comptes_mois_clotures').delete().eq('compte_id', id).eq('mois', monthKey)
       setClosedMonths(prev => { const n = new Set(prev); n.delete(monthKey); return n })
     } else {
-      await supabase
-        .from('suivi_comptes_mois_clotures')
-        .insert({ compte_id: id, mois: monthKey })
+      await supabase.from('suivi_comptes_mois_clotures').insert({ compte_id: id, mois: monthKey })
       setClosedMonths(prev => new Set([...prev, monthKey]))
       setExpandedMonths(e => ({ ...e, [monthKey]: false }))
     }
@@ -120,47 +109,43 @@ export default function AccountPage() {
 
   if (!compte) return <p className="text-gray-500">Compte introuvable.</p>
 
-  const soldeTheorique = parseFloat(compte.solde_initial) + transactions.reduce((s, t) => s + parseFloat(t.montant), 0)
-  const soldePointe = parseFloat(compte.solde_initial) + transactions.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
-  const nonPointe = soldeTheorique - soldePointe
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
+  const in1m = format(addMonths(new Date(), 1), 'yyyy-MM-dd')
+  const in3m = format(addMonths(new Date(), 3), 'yyyy-MM-dd')
+  const in1y = format(addYears(new Date(), 1), 'yyyy-MM-dd')
+
+  const base = parseFloat(compte.solde_initial)
+  const soldeAujourdhui = base + transactions.filter(t => t.date <= todayStr).reduce((s, t) => s + parseFloat(t.montant), 0)
+  const soldePointe = base + transactions.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
+  const nonPointe = soldeAujourdhui - soldePointe
+  const projM1  = base + transactions.filter(t => t.date <= in1m).reduce((s, t) => s + parseFloat(t.montant), 0)
+  const projM3  = base + transactions.filter(t => t.date <= in3m).reduce((s, t) => s + parseFloat(t.montant), 0)
+  const projM12 = base + transactions.filter(t => t.date <= in1y).reduce((s, t) => s + parseFloat(t.montant), 0)
 
   const cats = [...new Set(transactions.map(t => t.suivi_comptes_categories?.parent).filter(Boolean))].sort()
 
   const filtered = transactions.filter(t => {
     const monthMatch = !filterMonth || t.date.startsWith(filterMonth)
     const catMatch = !filterCat || t.suivi_comptes_categories?.parent === filterCat
-    const pointeMatch =
-      filterPointe === 'toutes' ? true :
-      filterPointe === 'pointees' ? t.pointee : !t.pointee
+    const pointeMatch = filterPointe === 'toutes' ? true : filterPointe === 'pointees' ? t.pointee : !t.pointee
     return monthMatch && catMatch && pointeMatch
   })
 
   const mainTxns = filtered.filter(t => !closedMonths.has(t.date.slice(0, 7)))
   const archivedTxns = filtered.filter(t => closedMonths.has(t.date.slice(0, 7)))
-
   const mainGrouped = groupByYearMonth(mainTxns)
   const mainYears = Object.keys(mainGrouped).sort()
-
   const archivedGrouped = groupByYearMonth(archivedTxns)
   const archivedYears = Object.keys(archivedGrouped).sort()
-
   const allMainMonthKeys = mainYears.flatMap(y => Object.keys(mainGrouped[y]))
-  const everythingExpanded =
-    mainYears.every(y => expandedYears[y]) &&
-    allMainMonthKeys.every(m => expandedMonths[m])
+  const everythingExpanded = mainYears.every(y => expandedYears[y]) && allMainMonthKeys.every(m => expandedMonths[m])
 
   function expandAll() {
     const years = {}, months = {}
-    mainYears.forEach(y => {
-      years[y] = true
-      Object.keys(mainGrouped[y]).forEach(m => { months[m] = true })
-    })
-    setExpandedYears(years)
-    setExpandedMonths(months)
+    mainYears.forEach(y => { years[y] = true; Object.keys(mainGrouped[y]).forEach(m => { months[m] = true }) })
+    setExpandedYears(years); setExpandedMonths(months)
   }
-
   function collapseAll() { setExpandedYears({}); setExpandedMonths({}) }
-
   function toggleYear(year) {
     const isOpen = !!expandedYears[year]
     setExpandedYears(e => ({ ...e, [year]: !isOpen }))
@@ -170,7 +155,6 @@ export default function AccountPage() {
       setExpandedMonths(e => ({ ...e, ...months }))
     }
   }
-
   function toggleArchivedYear(year) {
     const isOpen = !!expandedArchivedYears[year]
     setExpandedArchivedYears(e => ({ ...e, [year]: !isOpen }))
@@ -194,19 +178,43 @@ export default function AccountPage() {
         </button>
       </div>
 
-      {/* Balance cards */}
+      {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {/* Solde à ce jour */}
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde théorique</p>
-          <p className={`text-2xl font-bold mt-1 ${soldeTheorique >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{fmt(soldeTheorique)}</p>
+          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde à ce jour</p>
+          <p className={`text-2xl font-bold mt-1 ${soldeAujourdhui >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{fmt(soldeAujourdhui)}</p>
         </div>
+
+        {/* Solde pointé */}
         <div className="card">
           <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Solde pointé ✓</p>
           <p className={`text-2xl font-bold mt-1 ${soldePointe >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{fmt(soldePointe)}</p>
+          {Math.abs(nonPointe) > 0.01 && (
+            <p className="text-xs text-amber-500 mt-1 font-medium">Non pointé : {fmtDiff(nonPointe)}</p>
+          )}
         </div>
+
+        {/* Projections */}
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Non pointé</p>
-          <p className={`text-2xl font-bold mt-1 ${Math.abs(nonPointe) < 0.01 ? 'text-gray-400' : 'text-amber-500'}`}>{fmt(nonPointe)}</p>
+          <p className="text-xs text-gray-500 font-medium uppercase tracking-wide mb-2">Projections</p>
+          <div className="space-y-1.5">
+            {[
+              { label: '1 mois', val: projM1 },
+              { label: '3 mois', val: projM3 },
+              { label: '1 an',   val: projM12 },
+            ].map(({ label, val }) => (
+              <div key={label} className="flex items-center justify-between">
+                <span className="text-xs text-gray-400">{label}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-semibold text-gray-800">{fmt(val)}</span>
+                  <span className={`text-xs font-medium ${val - soldeAujourdhui >= 0 ? 'text-emerald-500' : 'text-red-400'}`}>
+                    {fmtDiff(val - soldeAujourdhui)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -239,7 +247,6 @@ export default function AccountPage() {
         </div>
       ) : (
         <>
-          {/* ── Main section ── */}
           {mainTxns.length > 0 && (
             <>
               <div className="flex justify-end">
@@ -279,17 +286,12 @@ export default function AccountPage() {
                           const txns = [...yearMonths[month]].sort((a, b) => b.date.localeCompare(a.date))
                           const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
                           const isMonthOpen = !!expandedMonths[month]
-
                           return (
                             <div key={month}>
                               <div className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={false}
-                                  onChange={() => toggleClosedMonth(month)}
+                                <input type="checkbox" checked={false} onChange={() => toggleClosedMonth(month)}
                                   className="w-4 h-4 text-emerald-600 rounded shrink-0 cursor-pointer"
-                                  title="Marquer comme Pointage Terminé"
-                                />
+                                  title="Marquer comme Pointage Terminé" />
                                 <button
                                   className="flex-1 flex items-center justify-between py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"
                                   onClick={() => setExpandedMonths(e => ({ ...e, [month]: !e[month] }))}
@@ -306,7 +308,6 @@ export default function AccountPage() {
                                   </span>
                                 </button>
                               </div>
-
                               {isMonthOpen && (
                                 <div className="card p-0 overflow-hidden mt-1 mb-2 ml-6">
                                   <table className="w-full text-sm">
@@ -332,7 +333,7 @@ export default function AccountPage() {
             </>
           )}
 
-          {/* ── Pointage Terminé section ── */}
+          {/* Pointage Terminé */}
           {archivedTxns.length > 0 && (
             <div className="mt-4">
               <button
@@ -360,7 +361,6 @@ export default function AccountPage() {
                     const yearTotal = sortedMonths.reduce((s, m) => s + yearMonths[m].reduce((ms, t) => ms + parseFloat(t.montant), 0), 0)
                     const yearCount = sortedMonths.reduce((s, m) => s + yearMonths[m].length, 0)
                     const isYearOpen = !!expandedArchivedYears[year]
-
                     return (
                       <div key={year} className="space-y-1">
                         <button
@@ -376,24 +376,18 @@ export default function AccountPage() {
                             {yearTotal >= 0 ? '+' : ''}{fmt(yearTotal)}
                           </span>
                         </button>
-
                         {isYearOpen && (
                           <div className="ml-4 space-y-1">
                             {sortedMonths.map(month => {
                               const txns = [...yearMonths[month]].sort((a, b) => a.date.localeCompare(b.date))
                               const monthTotal = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
                               const isMonthOpen = !!expandedArchivedMonths[month]
-
                               return (
                                 <div key={month}>
                                   <div className="flex items-center gap-2">
-                                    <input
-                                      type="checkbox"
-                                      checked={true}
-                                      onChange={() => toggleClosedMonth(month)}
+                                    <input type="checkbox" checked={true} onChange={() => toggleClosedMonth(month)}
                                       className="w-4 h-4 text-emerald-600 rounded shrink-0 cursor-pointer"
-                                      title="Retirer du Pointage Terminé"
-                                    />
+                                      title="Retirer du Pointage Terminé" />
                                     <button
                                       className="flex-1 flex items-center justify-between py-2 px-2 hover:bg-slate-50 rounded-lg transition-colors"
                                       onClick={() => setExpandedArchivedMonths(e => ({ ...e, [month]: !e[month] }))}
@@ -410,7 +404,6 @@ export default function AccountPage() {
                                       </span>
                                     </button>
                                   </div>
-
                                   {isMonthOpen && (
                                     <div className="card p-0 overflow-hidden mt-1 mb-2 ml-6 opacity-75">
                                       <table className="w-full text-sm">
