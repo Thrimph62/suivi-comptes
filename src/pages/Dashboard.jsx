@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format, startOfMonth, endOfMonth, addDays } from 'date-fns'
+import { format, startOfMonth, endOfMonth, addDays, addMonths, addYears } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { ArrowRight } from 'lucide-react'
@@ -11,12 +11,16 @@ function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
 }
 
+function fmtDiff(n) {
+  return `${n >= 0 ? '+' : ''}${fmt(n)}`
+}
+
 export default function Dashboard() {
   const { comptes } = useApp()
   const [balances, setBalances] = useState({})
   const [recentTxns, setRecentTxns] = useState([])
   const [chartData, setChartData] = useState([])
-  const [projection3m, setProjection3m] = useState(null)
+  const [projections, setProjections] = useState({}) // { compteId: { m1, m3, m12 } }
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
@@ -25,56 +29,86 @@ export default function Dashboard() {
   async function loadData() {
     setLoading(true)
     const ids = comptes.map(c => c.id)
+    const todayStr = format(new Date(), 'yyyy-MM-dd')
+    const in1m = format(addMonths(new Date(), 1), 'yyyy-MM-dd')
+    const in3m = format(addMonths(new Date(), 3), 'yyyy-MM-dd')
+    const in1y = format(addYears(new Date(), 1), 'yyyy-MM-dd')
 
+    // All transactions ever
     const { data: allTxns } = await supabase
       .from('suivi_comptes_transactions')
-      .select('compte_id, montant, pointee')
+      .select('compte_id, montant, pointee, date')
       .in('compte_id', ids)
 
+    // Compute balances per account
     const bal = {}
     for (const c of comptes) {
       const txns = (allTxns || []).filter(t => t.compte_id === c.id)
-      const total = txns.reduce((s, t) => s + parseFloat(t.montant), 0)
-      const pointed = txns.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
-      bal[c.id] = { solde: parseFloat(c.solde_initial) + total, pointe: parseFloat(c.solde_initial) + pointed }
+      const todayTxns = txns.filter(t => t.date <= todayStr)
+      const soldeAujourdhui = parseFloat(c.solde_initial) + todayTxns.reduce((s, t) => s + parseFloat(t.montant), 0)
+      const soldePointe = parseFloat(c.solde_initial) + txns.filter(t => t.pointee).reduce((s, t) => s + parseFloat(t.montant), 0)
+      bal[c.id] = {
+        aujourdhui: soldeAujourdhui,
+        pointe: soldePointe,
+        nonPointe: soldeAujourdhui - soldePointe,
+      }
     }
     setBalances(bal)
 
+    // Projections per account
+    const proj = {}
+    for (const c of comptes) {
+      const txns = (allTxns || []).filter(t => t.compte_id === c.id)
+      const base = parseFloat(c.solde_initial)
+      proj[c.id] = {
+        m1: base + txns.filter(t => t.date <= in1m).reduce((s, t) => s + parseFloat(t.montant), 0),
+        m3: base + txns.filter(t => t.date <= in3m).reduce((s, t) => s + parseFloat(t.montant), 0),
+        m12: base + txns.filter(t => t.date <= in1y).reduce((s, t) => s + parseFloat(t.montant), 0),
+      }
+    }
+    setProjections(proj)
+
+    // Recent transactions
     const { data: recent } = await supabase
       .from('suivi_comptes_transactions')
       .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
       .in('compte_id', ids)
-      .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(10)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(10)
     setRecentTxns(recent || [])
 
+    // Spending by category this month
     const mStart = format(startOfMonth(new Date()), 'yyyy-MM-dd')
     const mEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd')
     const { data: monthTxns } = await supabase
       .from('suivi_comptes_transactions')
       .select('montant, suivi_comptes_categories(parent)')
-      .in('compte_id', ids).gte('date', mStart).lte('date', mEnd).lt('montant', 0)
+      .in('compte_id', ids)
+      .gte('date', mStart).lte('date', mEnd).lt('montant', 0)
     const byCategory = {}
     for (const t of (monthTxns || [])) {
       const cat = t.suivi_comptes_categories?.parent || 'Non catégorisé'
       byCategory[cat] = (byCategory[cat] || 0) + Math.abs(parseFloat(t.montant))
     }
-    setChartData(Object.entries(byCategory).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 })).sort((a, b) => b.value - a.value).slice(0, 8))
+    setChartData(
+      Object.entries(byCategory)
+        .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+        .sort((a, b) => b.value - a.value).slice(0, 8)
+    )
 
-    const in90days = format(addDays(new Date(), 90), 'yyyy-MM-dd')
-    const { data: futureTxns } = await supabase
-      .from('suivi_comptes_transactions').select('compte_id, montant').in('compte_id', ids).lte('date', in90days)
-    const proj = {}
-    for (const c of comptes) {
-      const txns = (futureTxns || []).filter(t => t.compte_id === c.id)
-      proj[c.id] = parseFloat(c.solde_initial) + txns.reduce((s, t) => s + parseFloat(t.montant), 0)
-    }
-    setProjection3m(proj)
     setLoading(false)
   }
 
-  const totalGlobal = comptes.reduce((s, c) => s + (balances[c.id]?.solde || 0), 0)
+  // Global totals
+  const totalAujourdhui = comptes.reduce((s, c) => s + (balances[c.id]?.aujourdhui || 0), 0)
   const totalPointe = comptes.reduce((s, c) => s + (balances[c.id]?.pointe || 0), 0)
-  const totalProjection3m = projection3m ? comptes.reduce((s, c) => s + (projection3m[c.id] || 0), 0) : null
+  const totalNonPointe = totalAujourdhui - totalPointe
+
+  const totalM1 = comptes.reduce((s, c) => s + (projections[c.id]?.m1 || 0), 0)
+  const totalM3 = comptes.reduce((s, c) => s + (projections[c.id]?.m3 || 0), 0)
+  const totalM12 = comptes.reduce((s, c) => s + (projections[c.id]?.m12 || 0), 0)
+
   const COLORS = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316']
 
   return (
@@ -84,41 +118,56 @@ export default function Dashboard() {
         <span className="text-sm text-gray-500">{format(new Date(), 'EEEE d MMMM yyyy', { locale: fr })}</span>
       </div>
 
+      {/* ── Hero KPI ── */}
       <div className="card bg-gradient-to-r from-emerald-600 to-emerald-700 text-white border-0">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          {/* Left — soldes */}
           <div>
-            <p className="text-emerald-100 text-sm font-medium uppercase tracking-wide">Total pointé</p>
-            <p className="text-5xl font-bold mt-1">{fmt(totalPointe)}</p>
-            <p className="text-emerald-200 text-sm mt-2">
-              Théorique : <span className="font-semibold text-white">{fmt(totalGlobal)}</span>
-              {Math.abs(totalGlobal - totalPointe) > 0.01 && (
-                <span className="ml-2 text-emerald-300">({totalGlobal - totalPointe > 0 ? '+' : ''}{fmt(totalGlobal - totalPointe)} non pointé)</span>
-              )}
-            </p>
-          </div>
-          {totalProjection3m !== null && (
-            <div className="sm:text-right bg-emerald-700/50 rounded-xl px-4 py-3 shrink-0">
-              <p className="text-emerald-200 text-xs font-medium uppercase tracking-wide">Projection à 3 mois</p>
-              <p className="text-2xl font-bold text-white mt-0.5">{fmt(totalProjection3m)}</p>
-              <p className={`text-xs mt-0.5 ${totalProjection3m - totalGlobal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-                {totalProjection3m - totalGlobal >= 0 ? '+' : ''}{fmt(totalProjection3m - totalGlobal)} vs aujourd'hui
-              </p>
+            <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">Solde à ce jour</p>
+            <p className="text-5xl font-bold mt-1">{fmt(totalAujourdhui)}</p>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              <span className="text-emerald-100">
+                Pointé : <span className="font-semibold text-white">{fmt(totalPointe)}</span>
+              </span>
+              <span className={`font-medium ${Math.abs(totalNonPointe) < 0.01 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                Non pointé : {fmtDiff(totalNonPointe)}
+              </span>
             </div>
-          )}
+          </div>
+
+          {/* Right — projections */}
+          <div className="sm:text-right bg-emerald-700/50 rounded-xl px-4 py-3 shrink-0 min-w-[200px]">
+            <p className="text-emerald-200 text-xs font-medium uppercase tracking-wide mb-2">Projections</p>
+            <div className="space-y-1.5">
+              {[
+                { label: '1 mois', val: totalM1 },
+                { label: '3 mois', val: totalM3 },
+                { label: '1 an',   val: totalM12 },
+              ].map(({ label, val }) => (
+                <div key={label} className="flex sm:justify-end items-center gap-3">
+                  <span className="text-emerald-300 text-xs w-12 sm:text-right">{label}</span>
+                  <span className="text-white font-semibold text-sm">{fmt(val)}</span>
+                  <span className={`text-xs font-medium w-20 text-right ${val - totalAujourdhui >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {fmtDiff(val - totalAujourdhui)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
+      {/* ── Account cards ── */}
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-3">Soldes des comptes</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {comptes.map(c => {
-            const solde = balances[c.id]?.solde ?? 0
-            const pointe = balances[c.id]?.pointe ?? 0
-            const diff = solde - pointe
-            const proj3m = projection3m?.[c.id] ?? null
-            const projDiff = proj3m !== null ? proj3m - pointe : null
+            const bal = balances[c.id]
+            const proj = projections[c.id]
+            if (!bal) return null
             return (
-              <button key={c.id} onClick={() => navigate(`/compte/${c.id}`)} className="card text-left hover:shadow-md transition-shadow group">
+              <button key={c.id} onClick={() => navigate(`/compte/${c.id}`)}
+                className="card text-left hover:shadow-md transition-shadow group">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 text-sm truncate">{c.nom}</p>
@@ -126,25 +175,43 @@ export default function Dashboard() {
                   </div>
                   <ArrowRight size={16} className="text-gray-300 group-hover:text-emerald-500 transition-colors mt-1 shrink-0" />
                 </div>
-                <p className={`text-2xl font-bold mt-2 ${pointe >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{fmt(pointe)}</p>
-                <p className="text-xs text-gray-400 mt-0.5">Pointé ✓</p>
-                {Math.abs(diff) > 0.01 && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Théorique : <span className="font-medium text-gray-600">{fmt(solde)}</span>
-                    <span className="ml-1 text-amber-500">({diff > 0 ? '+' : ''}{fmt(diff)} non pointé)</span>
-                  </p>
-                )}
-                {proj3m !== null && (
-                  <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
-                    <span className="text-xs text-gray-400">Dans 3 mois</span>
-                    <div className="text-right">
-                      <span className="text-sm font-semibold text-gray-700">{fmt(proj3m)}</span>
-                      {projDiff !== null && Math.abs(projDiff) > 0.01 && (
-                        <span className={`ml-1 text-xs font-medium ${projDiff >= 0 ? 'text-emerald-500' : 'text-red-400'}`}>
-                          {projDiff >= 0 ? '+' : ''}{fmt(projDiff)}
-                        </span>
-                      )}
-                    </div>
+
+                {/* Solde à ce jour — main figure */}
+                <p className={`text-2xl font-bold mt-2 ${bal.aujourdhui >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+                  {fmt(bal.aujourdhui)}
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5">Solde à ce jour</p>
+
+                {/* Pointé + non pointé */}
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                  <span className="text-gray-500">
+                    Pointé : <span className="font-medium text-emerald-600">{fmt(bal.pointe)}</span>
+                  </span>
+                  {Math.abs(bal.nonPointe) > 0.01 && (
+                    <span className="text-amber-500 font-medium">
+                      Non pointé : {fmtDiff(bal.nonPointe)}
+                    </span>
+                  )}
+                </div>
+
+                {/* Projections */}
+                {proj && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
+                    {[
+                      { label: '1 mois', val: proj.m1 },
+                      { label: '3 mois', val: proj.m3 },
+                      { label: '1 an',   val: proj.m12 },
+                    ].map(({ label, val }) => (
+                      <div key={label} className="flex items-center justify-between">
+                        <span className="text-xs text-gray-400">{label}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-gray-700">{fmt(val)}</span>
+                          <span className={`text-xs font-medium ${val - bal.aujourdhui >= 0 ? 'text-emerald-500' : 'text-red-400'}`}>
+                            {fmtDiff(val - bal.aujourdhui)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </button>
@@ -153,6 +220,7 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── Bottom row ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">Dernières transactions</h2>
@@ -164,16 +232,23 @@ export default function Dashboard() {
                 <li key={t.id} className="py-2 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">{t.tiers_nom || '—'}</p>
-                    <p className="text-xs text-gray-400">{t.suivi_comptes_comptes?.nom} · {format(new Date(t.date), 'd MMM', { locale: fr })}</p>
+                    <p className="text-xs text-gray-400">
+                      {t.suivi_comptes_comptes?.nom} · {format(new Date(t.date), 'd MMM', { locale: fr })}
+                    </p>
                   </div>
-                  <span className={parseFloat(t.montant) >= 0 ? 'montant-positif text-sm' : 'montant-negatif text-sm'}>{fmt(t.montant)}</span>
+                  <span className={`text-sm font-semibold ${parseFloat(t.montant) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {fmt(t.montant)}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
         </div>
+
         <div className="card">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">Dépenses du mois — {format(new Date(), 'MMMM yyyy', { locale: fr })}</h2>
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">
+            Dépenses du mois — {format(new Date(), 'MMMM yyyy', { locale: fr })}
+          </h2>
           {chartData.length === 0 ? <p className="text-gray-400 text-sm">Aucune dépense ce mois.</p> : (
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20 }}>
