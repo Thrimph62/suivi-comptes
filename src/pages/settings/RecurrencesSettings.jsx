@@ -1,21 +1,16 @@
 import { useEffect, useState } from 'react'
-import { format } from 'date-fns'
-import { fr } from 'date-fns/locale'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { fmt, fdate, catLabel, TX } from '../../lib/format'
 import { useApp } from '../../contexts/AppContext'
 import Modal from '../../components/Modal'
-
-function fmt(n) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
-}
 
 const FREQ_LABELS = {
   hebdomadaire: 'Hebdomadaire', mensuel: 'Mensuel', annuel: 'Annuel', personnalise: 'Personnalisé',
 }
 
 export default function RecurrencesSettings() {
-  const { comptes } = useApp()
+  const { refresh } = useApp()
   const [recurrences, setRecurrences] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -25,31 +20,27 @@ export default function RecurrencesSettings() {
   useEffect(() => { loadRecurrences() }, [])
 
   async function loadRecurrences() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('suivi_comptes_recurrences')
-      .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
-      .order('date_debut', { ascending: false })
+    // une requête pour les règles, une pour les comptes d'occurrences futures (vue SQL)
+    const [{ data }, { data: counts }] = await Promise.all([
+      supabase.from('suivi_comptes_recurrences')
+        .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)').order('date_debut', { ascending: false }),
+      supabase.from('suivi_comptes_occurrences_futures').select('*'),
+    ])
     setRecurrences(data || [])
-    const today = format(new Date(), 'yyyy-MM-dd')
-    const counts = {}
-    for (const r of (data || [])) {
-      const { count } = await supabase
-        .from('suivi_comptes_transactions')
-        .select('*', { count: 'exact', head: true })
-        .eq('recurrence_id', r.id).gt('date', today)
-      counts[r.id] = count || 0
-    }
-    setFutureCounts(counts)
+    setFutureCounts(Object.fromEntries((counts || []).map(r => [r.recurrence_id, r.n])))
     setLoading(false)
   }
 
   async function deleteRecurrence(rec) {
     setDeleting(true)
-    const today = format(new Date(), 'yyyy-MM-dd')
-    await supabase.from('suivi_comptes_transactions').delete().eq('recurrence_id', rec.id).gt('date', today)
-    await supabase.from('suivi_comptes_recurrences').delete().eq('id', rec.id)
-    await loadRecurrences()
+    const today = new Date().toLocaleDateString('sv', { timeZone: 'Europe/Brussels' }) // AAAA-MM-JJ
+    const { error } = await supabase.from(TX).delete().eq('recurrence_id', rec.id).gt('date', today)
+    if (error) alert(error.message)
+    else {
+      const { error: e2 } = await supabase.from('suivi_comptes_recurrences').delete().eq('id', rec.id)
+      if (e2) alert(e2.message)
+    }
+    await loadRecurrences(); refresh()
     setDeleteTarget(null)
     setDeleting(false)
   }
@@ -69,7 +60,7 @@ export default function RecurrencesSettings() {
       ) : (
         <div className="space-y-3">
           {recurrences.map(rec => {
-            const montant = parseFloat(rec.montant)
+            const montant = Number(rec.montant)
             return (
               <div key={rec.id} className="card">
                 <div className="flex items-start justify-between gap-3">
@@ -85,9 +76,9 @@ export default function RecurrencesSettings() {
                     </div>
                     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
                       <span>📂 {rec.suivi_comptes_comptes?.nom || '—'}</span>
-                      <span>🏷 {rec.suivi_comptes_categories ? `${rec.suivi_comptes_categories.parent}${rec.suivi_comptes_categories.sous_categorie ? ` — ${rec.suivi_comptes_categories.sous_categorie}` : ''}` : '—'}</span>
-                      <span>📅 Début : {format(new Date(rec.date_debut), 'd MMM yyyy', { locale: fr })}</span>
-                      {rec.date_fin && <span>Fin : {format(new Date(rec.date_fin), 'd MMM yyyy', { locale: fr })}</span>}
+                      <span>🏷 {catLabel(rec.suivi_comptes_categories)}</span>
+                      <span>📅 Début : {fdate(rec.date_debut)}</span>
+                      {rec.date_fin && <span>Fin : {fdate(rec.date_fin)}</span>}
                     </div>
                     <p className="text-xs text-amber-600 mt-1">{futureCounts[rec.id] ?? '…'} occurrence(s) future(s) programmée(s)</p>
                   </div>

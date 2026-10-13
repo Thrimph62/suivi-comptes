@@ -2,17 +2,14 @@ import { useState, useEffect } from 'react'
 import { format, addDays, parseISO, isAfter } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { supabase } from '../lib/supabase'
+import { supabase, fetchAll } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
-
-function fmt(n) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
-}
+import { fmt, TX } from '../lib/format'
 
 const COLORS = ['#10b981','#3b82f6','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#84cc16','#f97316','#ec4899','#64748b']
 
 export default function ProjectionPage() {
-  const { comptes } = useApp()
+  const { comptes, soldes, refreshTrigger } = useApp()
   const [targetDate, setTargetDate] = useState(format(addDays(new Date(), 90), 'yyyy-MM-dd'))
   const [selectedComptes, setSelectedComptes] = useState([])
   const [chartData, setChartData] = useState([])
@@ -23,48 +20,34 @@ export default function ProjectionPage() {
     if (comptes.length) setSelectedComptes(comptes.filter(c => c.type === 'courant').map(c => c.id))
   }, [comptes])
 
-  useEffect(() => { if (selectedComptes.length && targetDate) compute() }, [selectedComptes, targetDate])
+  useEffect(() => { if (selectedComptes.length && targetDate && Object.keys(soldes).length) compute() }, [selectedComptes, targetDate, soldes, refreshTrigger])
 
   async function compute() {
-    if (!selectedComptes.length) return
     setLoading(true)
     const today = format(new Date(), 'yyyy-MM-dd')
-    const { data: allTxns } = await supabase
-      .from('suivi_comptes_transactions')
-      .select('compte_id, date, montant')
-      .in('compte_id', selectedComptes)
-      .lte('date', targetDate)
-      .order('date')
-    const txns = allTxns || []
-    const days = []
-    let cursor = new Date()
-    const end = parseISO(targetDate)
-    while (!isAfter(cursor, end)) { days.push(format(cursor, 'yyyy-MM-dd')); cursor = addDays(cursor, 1) }
+    // point de départ = solde veille (vue SQL) ; on ne charge que les mouvements d'aujourd'hui à la date cible
+    const rows = await fetchAll(() => supabase.from(TX).select('compte_id, date, montant')
+      .in('compte_id', selectedComptes).gte('date', today).lte('date', targetDate).order('date').order('id'))
+    const delta = {}
+    for (const t of rows) delta[t.compte_id + t.date] = (delta[t.compte_id + t.date] || 0) + Number(t.montant)
 
-    const filteredComptes = comptes.filter(c => selectedComptes.includes(c.id))
-    const runningBalances = {}
-    for (const c of filteredComptes) {
-      const pastTxns = txns.filter(t => t.compte_id === c.id && t.date < today)
-      runningBalances[c.id] = { base: parseFloat(c.solde_initial) + pastTxns.reduce((s, t) => s + parseFloat(t.montant), 0) }
-    }
-
-    const chart = days.map(day => {
-      const point = { date: format(parseISO(day), 'd MMM', { locale: fr }) }
+    const list = comptes.filter(c => selectedComptes.includes(c.id))
+    const run = Object.fromEntries(list.map(c => [c.id, soldes[c.id]?.avant || 0]))
+    const chart = []
+    for (let d = new Date(); !isAfter(d, parseISO(targetDate)); d = addDays(d, 1)) {
+      const day = format(d, 'yyyy-MM-dd')
+      const point = { date: format(d, 'd MMM', { locale: fr }) }
       let total = 0
-      for (const c of filteredComptes) {
-        const dayTxns = txns.filter(t => t.compte_id === c.id && t.date === day)
-        runningBalances[c.id].base += dayTxns.reduce((s, t) => s + parseFloat(t.montant), 0)
-        point[c.nom] = Math.round(runningBalances[c.id].base * 100) / 100
-        total += runningBalances[c.id].base
+      for (const c of list) {
+        run[c.id] += delta[c.id + day] || 0
+        point[c.nom] = Math.round(run[c.id] * 100) / 100
+        total += run[c.id]
       }
-      if (filteredComptes.length > 1) point['Total'] = Math.round(total * 100) / 100
-      return point
-    })
+      if (list.length > 1) point.Total = Math.round(total * 100) / 100
+      chart.push(point)
+    }
     setChartData(chart)
-
-    const finalBal = {}
-    for (const c of filteredComptes) { finalBal[c.id] = runningBalances[c.id].base }
-    setProjectedBalances(finalBal)
+    setProjectedBalances(run)
     setLoading(false)
   }
 
@@ -150,7 +133,7 @@ export default function ProjectionPage() {
             <tbody className="divide-y divide-gray-50">
               {comptes.filter(c => selectedComptes.includes(c.id)).map(c => {
                 const projected = projectedBalances[c.id] ?? 0
-                const current = chartData[0]?.[c.nom] ?? 0
+                const current = soldes[c.id]?.aujourdhui ?? 0
                 const diff = projected - current
                 return (
                   <tr key={c.id}>

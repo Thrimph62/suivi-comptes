@@ -1,14 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format } from 'date-fns'
-import { fr } from 'date-fns/locale'
 import { Search } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { supabase, fetchAll } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
+import { fmt, fdate, catLabel, TX } from '../lib/format'
 
-function fmt(n) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n)
-}
+const MAX = 300
 
 export default function SearchPage() {
   const { comptes } = useApp()
@@ -25,26 +22,19 @@ export default function SearchPage() {
     e?.preventDefault()
     setLoading(true)
     setSearched(true)
-    let q = supabase
-      .from('suivi_comptes_transactions')
-      .select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
-      .order('date', { ascending: false }).limit(200)
-    if (filterCompte) q = q.eq('compte_id', filterCompte)
-    if (filterDateFrom) q = q.gte('date', filterDateFrom)
-    if (filterDateTo) q = q.lte('date', filterDateTo)
-    const { data } = await q
-    let filtered = data || []
-    if (query.trim()) {
-      const q2 = query.toLowerCase().trim()
-      filtered = filtered.filter(t =>
-        (t.tiers_nom || '').toLowerCase().includes(q2) ||
-        (t.suivi_comptes_categories?.parent || '').toLowerCase().includes(q2) ||
-        (t.suivi_comptes_categories?.sous_categorie || '').toLowerCase().includes(q2) ||
-        (t.notes || '').toLowerCase().includes(q2) ||
-        Math.abs(parseFloat(t.montant)).toString().includes(q2)
-      )
-    }
-    setResults(filtered)
+    // tout est récupéré (pagination) puis filtré ici : un .limit() avant le filtre texte ratait des résultats
+    const rows = await fetchAll(() => {
+      let q = supabase.from(TX).select('*, suivi_comptes_comptes(nom), suivi_comptes_categories(parent, sous_categorie)')
+        .order('date', { ascending: false }).order('id')
+      if (filterCompte) q = q.eq('compte_id', filterCompte)
+      if (filterDateFrom) q = q.gte('date', filterDateFrom)
+      if (filterDateTo) q = q.lte('date', filterDateTo)
+      return q
+    })
+    const q = query.toLowerCase().trim()
+    setResults(!q ? rows : rows.filter(t =>
+      [t.tiers_nom, catLabel(t.suivi_comptes_categories), t.notes].join(' ').toLowerCase().includes(q) ||
+      Math.abs(t.montant).toString().includes(q.replace(',', '.'))))
     setLoading(false)
   }
 
@@ -74,7 +64,7 @@ export default function SearchPage() {
       {loading && <p className="text-gray-400 text-sm">Recherche…</p>}
       {searched && !loading && (
         <div>
-          <p className="text-sm text-gray-500 mb-3">{results.length} résultat(s)</p>
+          <p className="text-sm text-gray-500 mb-3">{results.length} résultat(s){results.length > MAX && ` — ${MAX} premiers affichés, affinez la recherche`}</p>
           {results.length === 0 ? (
             <div className="card text-center py-8"><p className="text-gray-400">Aucun résultat pour cette recherche.</p></div>
           ) : (
@@ -90,18 +80,17 @@ export default function SearchPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {results.map(t => {
-                    const montant = parseFloat(t.montant)
+                  {results.slice(0, MAX).map(t => {
+                    const montant = Number(t.montant)
                     return (
                       <tr key={t.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/compte/${t.compte_id}`)}>
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{format(new Date(t.date), 'd MMM yyyy', { locale: fr })}</td>
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fdate(t.date)}</td>
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{t.tiers_nom || '—'}</p>
                           {t.notes && <p className="text-xs text-gray-400 italic">{t.notes}</p>}
                         </td>
                         <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
-                          {t.suivi_comptes_categories?.parent || '—'}
-                          {t.suivi_comptes_categories?.sous_categorie && ` — ${t.suivi_comptes_categories.sous_categorie}`}
+                          {catLabel(t.suivi_comptes_categories)}
                         </td>
                         <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{t.suivi_comptes_comptes?.nom}</td>
                         <td className={`px-4 py-3 text-right font-semibold ${montant >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>

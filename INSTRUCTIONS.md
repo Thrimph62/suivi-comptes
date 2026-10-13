@@ -28,7 +28,9 @@
 4. Copiez **tout le contenu** et collez-le dans l'éditeur Supabase
 5. Cliquez **"Run"** (bouton vert)
 6. Vous devriez voir : `Success. No rows returned`
-7. ✅ Vos 13 comptes sont créés ! Vérifiez dans **Table Editor > comptes**
+7. ✅ Les tables et les vues de calcul des soldes sont créées. Vos comptes se créent ensuite dans l'application (**Paramètres > Comptes**).
+
+> 🔁 **Mise à jour d'une base existante** : relancez simplement `schema.sql`. Il est idempotent, ne modifie et ne supprime aucune donnée, et ajoute seulement ce qui manque (table des mois pointés, index, vues).
 
 ### 1.3 Créer votre compte utilisateur
 1. Dans Supabase, allez dans **Authentication > Users**
@@ -37,6 +39,7 @@
 4. Entrez un **mot de passe** — c'est ce que vous et Mathilde utiliserez pour vous connecter
 5. Cochez **"Auto confirm user"**
 6. Cliquez **"Create user"**
+7. ⚠️ Puis **Authentication > Providers > Email** : décochez **"Allow new users to sign up"**. Sinon n'importe qui peut créer un compte avec la clé publique et lire vos données.
 
 ### 1.4 Récupérer vos clés Supabase
 1. Dans Supabase, allez dans **Settings > API** (icône engrenage en bas à gauche)

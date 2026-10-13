@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useApp } from '../../contexts/AppContext'
+import { fmt } from '../../lib/format'
 import Modal from '../../components/Modal'
 
 const TYPES = { courant: 'Compte courant', epargne: 'Épargne', cheques_repas: 'Chèques repas', titres_services: 'Titres services', autre: 'Autre' }
 const PAYS = ['BE', 'FR', 'Autre']
 
 export default function AccountsSettings() {
-  const { comptes, loadComptes } = useApp()
+  const { comptes, loadComptes, refresh } = useApp()
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ nom: '', type: 'courant', banque: '', pays: 'BE', solde_initial: '0', ordre: '99' })
@@ -33,19 +34,18 @@ export default function AccountsSettings() {
     if (!form.nom.trim()) return
     setSaving(true)
     const payload = { nom: form.nom.trim(), type: form.type, banque: form.banque.trim() || null, pays: form.pays, solde_initial: parseFloat(form.solde_initial) || 0, ordre: parseInt(form.ordre) || 99 }
-    if (editing) {
-      await supabase.from('suivi_comptes_comptes').update(payload).eq('id', editing.id)
-    } else {
-      await supabase.from('suivi_comptes_comptes').insert(payload)
-    }
-    await loadComptes()
+    const q = supabase.from('suivi_comptes_comptes')
+    const { error } = await (editing ? q.update(payload).eq('id', editing.id) : q.insert(payload))
+    if (error) alert(error.message)
+    await loadComptes(); refresh()
     setShowModal(false)
     setSaving(false)
   }
 
   async function deleteAccount(id) {
-    await supabase.from('suivi_comptes_comptes').delete().eq('id', id)
-    await loadComptes()
+    const { error } = await supabase.from('suivi_comptes_comptes').delete().eq('id', id)
+    if (error) alert(error.message)
+    await loadComptes(); refresh()
     setDeleteTarget(null)
   }
 
@@ -76,7 +76,7 @@ export default function AccountsSettings() {
                     <td className="px-4 py-3 text-right">
                       <p className="text-xs text-gray-400">Solde initial</p>
                       <p className={`font-semibold ${parseFloat(c.solde_initial) >= 0 ? 'text-gray-700' : 'text-red-500'}`}>
-                        {new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(c.solde_initial)}
+                        {fmt(c.solde_initial)}
                       </p>
                     </td>
                     <td className="px-4 py-3 w-16">

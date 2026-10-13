@@ -1,6 +1,7 @@
 -- ============================================================
 -- SUIVI COMPTES - Schéma Supabase (tables préfixées suivi_comptes_)
 -- Coller dans : Supabase > SQL Editor > New Query > Run
+-- IDEMPOTENT : peut être relancé sur une base existante sans toucher aux données.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS suivi_comptes_comptes (
@@ -61,32 +62,54 @@ CREATE TABLE IF NOT EXISTS suivi_comptes_transactions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Table des mois dont le pointage est terminé (utilisée par la page d'un compte)
+CREATE TABLE IF NOT EXISTS suivi_comptes_mois_clotures (
+  compte_id UUID NOT NULL REFERENCES suivi_comptes_comptes(id) ON DELETE CASCADE,
+  mois TEXT NOT NULL,
+  PRIMARY KEY (compte_id, mois)
+);
+
+-- ============================================================
+-- INDEX (accélèrent soldes, pages de compte, récurrences)
+-- ============================================================
+CREATE INDEX IF NOT EXISTS suivi_comptes_txn_compte_date ON suivi_comptes_transactions (compte_id, date);
+CREATE INDEX IF NOT EXISTS suivi_comptes_txn_recurrence  ON suivi_comptes_transactions (recurrence_id);
+CREATE INDEX IF NOT EXISTS suivi_comptes_txn_transfer    ON suivi_comptes_transactions (transfer_id);
+
 -- ============================================================
 -- ROW LEVEL SECURITY
+-- (Authentication > Providers > Email : désactiver "Allow new users to sign up")
 -- ============================================================
-ALTER TABLE suivi_comptes_comptes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE suivi_comptes_categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE suivi_comptes_tiers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE suivi_comptes_recurrences ENABLE ROW LEVEL SECURITY;
-ALTER TABLE suivi_comptes_transactions ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['comptes','categories','tiers','recurrences','transactions','mois_clotures'] LOOP
+    EXECUTE format('ALTER TABLE suivi_comptes_%s ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS "Acces authentifie" ON suivi_comptes_%s', t);
+    EXECUTE format('CREATE POLICY "Acces authentifie" ON suivi_comptes_%s FOR ALL USING (auth.role() = ''authenticated'')', t);
+  END LOOP;
+END $$;
 
-CREATE POLICY "Acces authentifie" ON suivi_comptes_comptes FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON suivi_comptes_categories FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON suivi_comptes_tiers FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON suivi_comptes_recurrences FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Acces authentifie" ON suivi_comptes_transactions FOR ALL USING (auth.role() = 'authenticated');
+-- ============================================================
+-- VUES (calcul des soldes côté base : pas de limite de 1000 lignes)
+-- security_invoker = la RLS s'applique à l'utilisateur connecté
+-- ============================================================
+CREATE OR REPLACE VIEW suivi_comptes_soldes WITH (security_invoker = true) AS
+WITH p AS (SELECT (now() AT TIME ZONE 'Europe/Brussels')::date AS d)
+SELECT c.id AS compte_id,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.date <  p.d), 0)                          AS avant,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.date <= p.d), 0)                          AS aujourdhui,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.pointee), 0)                              AS pointe,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.date <= p.d + INTERVAL '1 month'), 0)     AS m1,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.date <= p.d + INTERVAL '3 months'), 0)    AS m3,
+  c.solde_initial + COALESCE(SUM(t.montant) FILTER (WHERE t.date <= p.d + INTERVAL '1 year'), 0)      AS m12
+FROM suivi_comptes_comptes c
+CROSS JOIN p
+LEFT JOIN suivi_comptes_transactions t ON t.compte_id = c.id
+GROUP BY c.id, c.solde_initial;
 
--- ============================================================
--- DONNÉES INITIALES - 10 COMPTES
--- ============================================================
-INSERT INTO suivi_comptes_comptes (nom, type, banque, pays, solde_initial, ordre) VALUES
-  ('Compte Courant Timothé',  'courant',         'Argenta',           'BE', 0, 1),
-  ('Compte Commun BE',        'courant',         'Argenta',           'BE', 0, 2),
-  ('Compte Commun FR',        'courant',         'Caisse d''Epargne', 'FR', 0, 3),
-  ('Livret A Timothé',        'epargne',         'Caisse d''Epargne', 'FR', 0, 4),
-  ('Livret A Justine',        'epargne',         'Caisse d''Epargne', 'FR', 0, 5),
-  ('Livret A Charlotte',      'epargne',         'Caisse d''Epargne', 'FR', 0, 6),
-  ('Epargne Pension Timothé', 'epargne',         'Argenta',           'BE', 0, 7),
-  ('Chèques Repas Timothé',   'cheques_repas',   NULL,                'BE', 0, 8),
-  ('Chèques Repas Mathilde',  'cheques_repas',   NULL,                'BE', 0, 9),
-  ('Titres Services',         'titres_services', NULL,                'BE', 0, 10);
+CREATE OR REPLACE VIEW suivi_comptes_occurrences_futures WITH (security_invoker = true) AS
+SELECT recurrence_id, COUNT(*)::int AS n
+FROM suivi_comptes_transactions
+WHERE recurrence_id IS NOT NULL AND date > (now() AT TIME ZONE 'Europe/Brussels')::date
+GROUP BY recurrence_id;
