@@ -11,7 +11,7 @@ export function AppProvider({ children }) {
   const [soldes, setSoldes] = useState({}) // { [compte_id]: {avant, aujourdhui, pointe, m1, m3, m12} } (vue SQL)
   const [loading, setLoading] = useState(true)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
-  const [transactionModal, setTransactionModal] = useState({ open: false, transaction: null, defaultCompteId: null })
+  const [transactionModal, setTransactionModal] = useState({ open: false, transaction: null, defaultCompteId: null, prefill: null })
 
   const load = (setter, query) => async () => { const { data } = await query(); if (data) setter(data) }
   const loadComptes = useCallback(load(setComptes, () => supabase.from('suivi_comptes_comptes').select('*').order('ordre')), [])
@@ -28,10 +28,10 @@ export function AppProvider({ children }) {
     Promise.all([loadComptes(), loadCategories(), loadTiers(), loadSoldes()]).then(() => setLoading(false))
   }, [loadComptes, loadCategories, loadTiers, loadSoldes])
 
-  const openTransactionModal = (defaultCompteId = null, transaction = null) =>
-    setTransactionModal({ open: true, transaction, defaultCompteId })
+  const openTransactionModal = (defaultCompteId = null, transaction = null, prefill = null) =>
+    setTransactionModal({ open: true, transaction, defaultCompteId, prefill })
   const closeTransactionModal = (saved = false) => {
-    setTransactionModal({ open: false, transaction: null, defaultCompteId: null })
+    setTransactionModal({ open: false, transaction: null, defaultCompteId: null, prefill: null })
     if (saved) refresh()
   }
 

@@ -65,7 +65,7 @@ function RecurrenceFields({ id, label, on, setOn, rec, setRec }) {
 
 export default function TransactionFormModal() {
   const { transactionModal, closeTransactionModal, comptes, categories, tiers, loadCategories, loadTiers } = useApp()
-  const { open, transaction, defaultCompteId } = transactionModal
+  const { open, transaction, defaultCompteId, prefill } = transactionModal
 
   const [mode, setMode] = useState('transaction') // 'transaction' | 'virement'
   const [form, setForm] = useState({})
@@ -90,11 +90,11 @@ export default function TransactionFormModal() {
       setTierSearch(transaction.tiers_nom || '')
     } else {
       const first = defaultCompteId || comptes[0]?.id || ''
-      setForm({ compte_id: first, date: today(), tiers_id: '', tiers_nom: '', categorie_id: '', montant: '', notes: '', pointee: false })
+      setForm({ compte_id: first, date: today(), tiers_id: '', tiers_nom: '', categorie_id: '', montant: '', notes: '', pointee: false, ...prefill })
       setTransfer({ from: first, to: comptes.find(c => c.id !== first)?.id || '', montant: '', date: today(), notes: '' })
-      setTierSearch('')
+      setTierSearch(prefill?.tiers_nom || '')
     }
-  }, [open, transaction, defaultCompteId, comptes])
+  }, [open, transaction, defaultCompteId, prefill, comptes])
 
   if (!open) return null
 
@@ -312,7 +312,7 @@ export default function TransactionFormModal() {
                 <button type="button" onClick={() => setField('montant', form.montant ? Math.abs(parseFloat(form.montant)) : '')}
                   className={`px-3 py-2 ${parseFloat(form.montant) > 0 ? 'bg-emerald-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>+ Recette</button>
               </div>
-              <input type="number" step="0.01" className="input flex-1" placeholder="0.00"
+              <input type="number" step="0.01" className="input flex-1" placeholder="0.00" autoFocus={!!prefill} onFocus={e => e.target.select()}
                 value={form.montant === '' ? '' : Math.abs(parseFloat(form.montant) || 0)}
                 onChange={e => {
                   const abs = parseFloat(e.target.value) || 0

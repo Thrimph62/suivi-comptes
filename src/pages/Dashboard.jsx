@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format, startOfMonth, endOfMonth } from 'date-fns'
+import { format, startOfMonth, endOfMonth, subDays } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { ArrowRight } from 'lucide-react'
@@ -12,10 +12,28 @@ import Projections from '../components/Projections'
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
 const iso = d => format(d, 'yyyy-MM-dd')
 
+// Tiers les plus fréquents (>= 5 fois en 90 jours, hors virements et récurrences), 8 max, affichés par ordre alphabétique.
+// Compte proposé = le plus utilisé pour ce tiers (à égalité : le plus récent). Rows triées de la plus récente à la plus ancienne.
+function quickList(rows) {
+  const g = {}
+  for (const t of rows) {
+    const k = t.tiers_nom.trim().toLowerCase()
+    if (!k) continue
+    const e = (g[k] ??= { last: t, n: 0, byCompte: {} })
+    e.n++
+    e.byCompte[t.compte_id] = (e.byCompte[t.compte_id] || 0) + 1
+  }
+  return Object.values(g).filter(e => e.n >= 5)
+    .sort((a, b) => b.n - a.n || b.last.date.localeCompare(a.last.date)).slice(0, 8)
+    .map(({ last, byCompte }) => ({ ...last, compte_id: Object.keys(byCompte).sort((x, y) => byCompte[y] - byCompte[x])[0] }))
+    .sort((a, b) => a.tiers_nom.localeCompare(b.tiers_nom, 'fr', { sensitivity: 'base' }))
+}
+
 export default function Dashboard() {
-  const { comptes, soldes, refreshTrigger } = useApp()
+  const { comptes, soldes, refreshTrigger, openTransactionModal } = useApp()
   const [recent, setRecent] = useState([])
   const [chartData, setChartData] = useState([])
+  const [quick, setQuick] = useState([])
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -25,8 +43,12 @@ export default function Dashboard() {
       // dépenses du mois, hors virements internes
       fetchAll(() => supabase.from(TX).select('montant, suivi_comptes_categories(parent)')
         .gte('date', iso(startOfMonth(now))).lte('date', iso(endOfMonth(now))).lt('montant', 0).is('transfer_id', null).order('id')),
-    ]).then(([{ data }, month]) => {
+      fetchAll(() => supabase.from(TX).select('compte_id, tiers_id, tiers_nom, categorie_id, montant, date')
+        .gte('date', iso(subDays(now, 90))).lte('date', iso(now)).is('transfer_id', null).is('recurrence_id', null).not('tiers_nom', 'is', null)
+        .order('date', { ascending: false }).order('id')),
+    ]).then(([{ data }, month, last90]) => {
       setRecent(data || [])
+      setQuick(quickList(last90))
       const byCat = {}
       for (const t of month) {
         const c = t.suivi_comptes_categories?.parent || 'Non catégorisé'
@@ -64,6 +86,24 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {quick.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">Saisie rapide</h2>
+          <div className="flex flex-wrap gap-2">
+            {quick.map(t => (
+              <button key={t.tiers_nom} className="card py-2 px-3 text-left hover:shadow-md hover:border-emerald-300 transition"
+                onClick={() => openTransactionModal(t.compte_id, null, {
+                  compte_id: t.compte_id, tiers_id: t.tiers_id || '', tiers_nom: t.tiers_nom, categorie_id: t.categorie_id || '',
+                  montant: Number(t.montant) >= 0 ? '0' : '', // '0' = signe « recette » (champ vide = dépense)
+                })}>
+                <p className="text-sm font-medium text-gray-900">{t.tiers_nom}</p>
+                <p className="text-xs text-gray-400">{comptes.find(c => c.id === t.compte_id)?.nom}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-3">Soldes des comptes</h2>
